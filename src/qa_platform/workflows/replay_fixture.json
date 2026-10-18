@@ -1,0 +1,30 @@
+{
+  "schema_version": "rag-replay-fixture/v1",
+  "id": "dns-teaching-v1",
+  "title": "DNS 排查教学合成快照",
+  "origin": "synthetic",
+  "query": "Pod 中 Service 域名解析失败，如何排查？",
+  "notice": "全部正文、召回分数、重排分数与回答草稿均为手工构造的教学数据，不是真实模型运行记录，不是实际集群维护依据。",
+  "documents": [
+    {"chunk_id": "demo-overview", "title": "概览（合成）", "text": "学习示例：排查 Service 访问问题时，需要区分域名解析、网络连通和应用响应。"},
+    {"chunk_id": "demo-namespace", "title": "命名空间（合成）", "text": "学习示例：如果 Pod 与 Service 位于不同命名空间，应使用包含 Service 命名空间的名称进行查询。"},
+    {"chunk_id": "demo-dns-config", "title": "解析配置（合成）", "text": "学习示例：如果完全限定名称可以解析，但相对名称不能解析，需要检查 Pod 中的\n`/etc/resolv.conf` 配置是否正确。"}
+  ],
+  "bm25": [
+    {"chunk_id": "demo-overview", "score": 9.0},
+    {"chunk_id": "demo-namespace", "score": 8.0}
+  ],
+  "dense": [
+    {"chunk_id": "demo-dns-config", "score": 0.8},
+    {"chunk_id": "demo-namespace", "score": 0.7}
+  ],
+  "reranker_scores": {"demo-overview": 0.4, "demo-namespace": 0.96, "demo-dns-config": 0.92},
+  "answer": {
+    "status": "partial",
+    "claims": [
+      {"text": "学习示例中，Pod 与 Service 不同命名空间时，应使用包含 Service 命名空间的名称查询。", "evidence": [{"source_id": "S1", "quote_id": "Q1"}]},
+      {"text": "学习示例中，完全限定名称能解析但相对名称不能解析时，需要检查 Pod 中的 /etc/resolv.conf 配置。", "evidence": [{"source_id": "S2", "quote_id": "Q1"}]}
+    ],
+    "missing_info": ["缺少实际集群资料与现场查询结果；合成数据不能作为现场维护依据。"]
+  }
+}

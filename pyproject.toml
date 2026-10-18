@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 milvus = ["pymilvus==2.6.17", "milvus-lite==3.2.2"]
+workflow = ["langgraph==1.2.16", "langsmith>=0.14.9,<1.0.0"]
 dev = ["pytest", "ruff"]
 
 [tool.setuptools.packages.find]
@@ -25,6 +26,7 @@ namespaces = false
 
 [tool.setuptools.package-data]
 "qa_platform.ingestion" = ["_snapshots/k8s_prepare_v1/*.py"]
+"qa_platform.workflows" = ["replay_fixture.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

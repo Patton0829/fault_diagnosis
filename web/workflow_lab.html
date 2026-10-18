@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="用相同教学合成快照，零模型回放普通 Python 与 LangGraph 的状态更新和节点轨迹。">
+  <title>LangGraph 零模型编排对照台</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root{color-scheme:light;--bg:#f4f6f8;--paper:#fff;--ink:#223447;--muted:#596b7d;--line:#d9e2e8;--teal:#116c65;--soft:#e7f3f0;--python:#587d99;--graph:#8170a2;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}button{font:inherit;cursor:pointer}button:disabled{cursor:default;opacity:.5}button,a,summary{touch-action:manipulation}button:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #169f94;outline-offset:3px}[hidden]{display:none!important}h1,h2,h3,p{margin:0}a{color:var(--teal)}.shell{max-width:1360px;margin:auto;padding:30px 28px 42px}.top{display:flex;justify-content:space-between;align-items:start;gap:24px;margin-bottom:20px}.eyebrow{font-size:11px;color:var(--teal);letter-spacing:.14em}h1{font-size:27px;font-weight:650;margin-top:3px}.subtitle{color:var(--muted);font-size:14px;margin-top:6px}.back{font-size:13px;white-space:nowrap}.panel{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:20px;margin-top:18px}.intro{margin-top:0}.tags,.checks{display:flex;gap:7px;flex-wrap:wrap}.tag{font-size:12px;background:var(--soft);color:#195e56;border-radius:5px;padding:3px 9px}.tag.neutral{background:#e9eef2;color:var(--muted)}.query{font-size:19px;font-weight:550;margin:14px 0 9px}.notice{color:var(--muted);font-size:12px;overflow-wrap:anywhere}.important{color:#795215;background:#fff7e8;border:1px solid #e8d7b7;border-radius:7px;padding:10px 13px;font-size:13px;margin-top:13px}.run-row{display:flex;gap:18px;align-items:center;margin-top:17px}.primary,.secondary{border:1px solid #b8cbd1;border-radius:7px;padding:9px 16px;line-height:1.45;color:var(--teal);background:white}.primary{background:var(--teal);border-color:var(--teal);color:white;text-align:left;min-width:235px}.primary strong,.primary small{display:block}.primary strong{font-size:14px}.primary small{font-size:11px;color:#d4efea;margin-top:3px}.primary:hover:not(:disabled){background:#085b55}.secondary:hover:not(:disabled){background:var(--soft)}.status{font-size:13px;color:var(--muted)}.error{padding:11px 14px;border:1px solid #e7c5c1;background:#fff0ef;border-radius:7px;color:#8b332b;font-size:13px;margin-top:12px}.section-head{display:flex;justify-content:space-between;align-items:baseline;gap:15px;flex-wrap:wrap;margin-bottom:12px}h2{font-size:18px;font-weight:650}h3{font-size:15px;font-weight:650}.diagram{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin-top:14px}.graph-node{border:1px solid #cbd6df;border-radius:7px;background:#f8fafb;padding:7px 10px;font-size:12px;text-align:center;min-width:80px}.graph-node small{display:block;font:10px/1.5 var(--mono);color:var(--muted)}.graph-node.selected{background:#eee9f4;border-color:var(--graph);box-shadow:0 0 0 1px var(--graph)}.graph-node.terminal{min-width:55px;background:#edf3f4;color:var(--muted);font-family:var(--mono)}.arrow{color:#99a9b4;font-size:17px}.graph-edges{font:11px/1.8 var(--mono);color:var(--muted);margin-top:9px;overflow-wrap:anywhere}.graph-plan{font-size:12px;color:var(--muted);margin-top:10px}.checks{margin-top:12px}.check{background:var(--soft);border:1px solid #cde1da;color:#1b6559;border-radius:5px;font-size:12px;padding:4px 9px}.navigator{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.step-count{font:12px/1.8 var(--mono);color:var(--muted)}.step-list{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;list-style:none;padding:0;margin:13px 0 0}.step-button{border:1px solid var(--line);border-radius:7px;padding:9px 10px;background:#fff;text-align:left;color:var(--ink);width:100%;height:100%;font-size:12px}.step-button span{font:10px var(--mono);color:var(--muted);display:block;margin-top:4px;overflow-wrap:anywhere}.step-button.selected{border-color:var(--teal);background:#edf7f4;box-shadow:0 0 0 1px var(--teal)}.step-description{font-size:13px;color:var(--muted);margin-top:12px}.columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:17px;margin-top:17px}.route{min-width:0;background:white;border:1px solid var(--line);border-radius:9px;overflow:hidden;--route:var(--python)}.route.graph{--route:var(--graph)}.route-head{border-top:3px solid var(--route);border-bottom:1px solid var(--line);padding:15px 17px}.route-head h2{color:var(--route);font-size:17px}.route-head p{font-size:12px;color:var(--muted);margin-top:4px}.route-body{padding:15px}.code{padding:11px 0;background:#f5f7f9;border:1px solid #e3e9ee;border-radius:6px;font:11px/1.85 var(--mono);overflow:auto;margin:8px 0 13px}.code-line{display:block;padding:0 11px;white-space:pre;min-width:max-content}.code-line.active{background:#e0eee9;border-left:3px solid var(--teal);padding-left:8px;color:#144f46}.code-line.current{background:#ece7f3;border-left:3px solid var(--graph);padding-left:8px}.phase{border:1px solid var(--line);border-radius:6px;margin-top:9px;overflow:hidden}.phase summary{padding:8px 11px;font-size:12px;background:#fafcfd;cursor:pointer}.phase.update{border-color:#b6d5ca}.phase.update summary{background:#edf7f1;color:#1b6559}.phase pre{margin:0;padding:11px;font:11px/1.8 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto}.phase-label{color:var(--muted);font-size:11px;margin-top:6px}.answer{font-size:13px;background:#f5f8f9;border:1px solid #e1e9ed;border-radius:7px;padding:13px;margin-top:12px;white-space:pre-wrap;overflow-wrap:anywhere}.summary-details{margin-top:12px;font-size:12px;color:var(--muted)}.summary-details summary{cursor:pointer;color:var(--teal)}.summary-details pre{font:11px/1.8 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f8fa;border:1px solid var(--line);border-radius:5px;padding:12px;max-height:400px;overflow:auto}.learning{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px;margin-top:13px}.learning p{font-size:12px;color:var(--muted);margin-top:4px}.boundary{font-size:12px;color:var(--muted);border-top:1px solid var(--line);padding-top:16px;margin-top:22px}.footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin-top:13px}
+    @media(max-width:850px){.shell{padding:23px 19px 32px}.step-list{grid-template-columns:repeat(3,minmax(0,1fr))}.columns{gap:12px}.route-body{padding:12px}.learning{grid-template-columns:1fr}.query{font-size:17px}.panel{padding:17px}}@media(max-width:600px){.top{flex-direction:column;gap:8px}h1{font-size:23px}.run-row{align-items:stretch;flex-direction:column;gap:10px}.columns{grid-template-columns:1fr}.primary{width:100%}.graph-node{min-width:74px}.shell{padding:18px 13px 28px}.panel{padding:14px}.step-list{grid-template-columns:repeat(2,minmax(0,1fr))}.notice{font-size:11px}.navigator{gap:7px}.secondary{font-size:12px;padding:7px 11px}}
+  </style>
+</head>
+<body>
+<main class="shell">
+  <header class="top"><div><p class="eyebrow">WORKFLOW · 零模型回放</p><h1>同一个 RAG，谁来安排下一步？</h1><p class="subtitle">普通函数调用 vs LangGraph：固定输入与节点，只比较调度和状态更新。</p></div><a class="back" href="/">← 返回检索对照台</a></header>
+  <section class="panel intro" aria-labelledby="fixture-title">
+    <div class="tags"><span class="tag">教学合成快照</span><span class="tag">Embedding 0 · 重排 0 · 聊天 0</span><span id="version" class="tag neutral">读取本地计划中</span></div>
+    <h2 id="fixture-title" class="query">DNS 排查教学合成快照</h2><p id="query" class="notice">正在读取回放计划；不会读取密钥或请求模型。</p>
+    <p id="fixture-notice" class="important">这是教学合成数据，不是实时检索、真实模型生成或当前集群诊断。两路使用同一批节点函数。</p>
+    <div class="run-row"><button id="run-button" class="primary" type="button" disabled><strong>运行两路零模型对照</strong><small>服务端一次执行 · 本地回放 · 无模型请求</small></button><p id="status" class="status" role="status" aria-live="polite">只读取计划；尚未执行回放。</p></div>
+    <p id="error" class="error" role="alert" hidden></p>
+  </section>
+  <section class="panel" aria-labelledby="graph-title"><div class="section-head"><h2 id="graph-title">流程图：把执行顺序显式写出来</h2><p class="notice">运行后按 LangGraph 实际编译图的节点与边展示</p></div><div id="diagram" class="diagram" aria-label="LangGraph 编译流程图"><p class="notice">等待本地回放。</p></div><p id="graph-edges" class="graph-edges"></p><p id="graph-plan" class="graph-plan">计划节点将在加载后列出。</p></section>
+  <section id="results" hidden aria-labelledby="results-title">
+    <section class="panel"><div class="section-head"><h2 id="results-title">固定节点函数，观察两种调度</h2><p id="result-counts" class="notice"></p></div><div id="checks" class="checks"></div><p class="notice" style="margin-top:10px">相同结果是本次固定输入对照的结果，不是检索质量或性能测试；普通 Python 也能实现日志、分支和状态管理。</p></section>
+    <section class="panel" aria-labelledby="step-title"><div class="section-head"><h2 id="step-title">逐步查看已经执行的轨迹</h2><div class="navigator"><button id="previous-button" class="secondary" type="button" disabled>← 上一步</button><span id="step-count" class="step-count"></span><button id="next-button" class="secondary" type="button" disabled>下一步 →</button></div></div><p class="notice">回放请求已在服务端执行完毕。下方切换只查看保存的 before / update / after，不再执行节点，也不发送模型请求。</p><ol id="step-list" class="step-list"></ol><p id="step-description" class="step-description"></p></section>
+    <div id="columns" class="columns" aria-busy="false">
+      <section class="route" aria-labelledby="plain-title"><header class="route-head"><h2 id="plain-title">普通 Python · 调用者掌控顺序</h2><p>显式调用函数，再由调用者把返回的 update 合并到 state。</p></header><div class="route-body"><p class="notice">代码示意：同一组节点函数，省略了轨迹记录代码。</p><pre id="plain-code" class="code" aria-label="普通 Python 调度示意"></pre><div id="plain-event"></div></div></section>
+      <section class="route graph" aria-labelledby="langgraph-title"><header class="route-head"><h2 id="langgraph-title">LangGraph · 编译图掌控顺序</h2><p>注册节点与边、compile；图运行器沿边调度并合并 update。</p></header><div class="route-body"><p class="notice">代码示意：add_node / add_edge 定义在执行前完成；紫色行为当前运行事件。</p><pre id="graph-code" class="code" aria-label="LangGraph 调度示意"></pre><div id="langgraph-event"></div></div></section>
+    </div>
+    <section class="panel" aria-labelledby="answer-title"><div class="section-head"><h2 id="answer-title">共同终点：同一份已校验教学答案</h2><p class="notice">不是新模型回答，也不证明语义正确</p></div><pre id="answer" class="answer"></pre><details class="summary-details"><summary>展开两路最终完整状态</summary><div class="columns"><div><h3>普通 Python</h3><pre id="plain-final"></pre></div><div><h3>LangGraph</h3><pre id="langgraph-final"></pre></div></div></details></section>
+  </section>
+  <section class="panel" aria-labelledby="learn-title"><h2 id="learn-title">这一步学什么，不学什么？</h2><div class="learning"><div><h3>状态 State</h3><p>问题、候选、证据、草稿与答案集中在共享状态。节点读取已有字段，只返回本步新增或修改的字段。</p></div><div><h3>节点 Node</h3><p>节点本质上仍是 Python 函数。当前检索、重排、生成节点读取合成快照，融合与校验仅在本地计算。</p></div><div><h3>边 Edge</h3><p>普通代码把顺序写在调用语句里；LangGraph 把顺序写成边，编译后交给图运行器执行。本步只是线性图。</p></div></div></section>
+  <p id="boundary" class="boundary">本步没有连接 Milvus、读取 .env、请求 Embedding / Reranker / 聊天模型；没有实现持久化、断点续跑、自动重试、多轮记忆或条件分支。LangGraph 不会凭编排自动提高回答准确率。</p>
+  <footer class="footer"><span>同一输入 · 同一节点函数 · 同一状态更新 · 两种调度</span><span id="request-summary">模型服务 HTTP 0；本地页面 API 通信另计。</span></footer>
+</main>
+<script>
+"use strict";
+// 响应和合成文本一律使用 textContent；不执行模型输出或文档命令。
+const SCHEMA = "rag-workflow-replay/v1";
+const NODE_ORDER = ["retrieve","fuse","rerank","prepare_evidence","generate","validate"];
+const COUNT_KEYS = ["embedding","http","reranker","chat"];
+const state = {plan:null,data:null,busy:false,step:0,sequence:0};
+const byId = id => document.getElementById(id);
+function element(tag,className,text){const item=document.createElement(tag);if(className)item.className=className;if(text!==undefined)item.textContent=String(text);return item;}
+function object(value){return value!==null&&typeof value==="object"&&!Array.isArray(value);}
+function requireValue(value,message){if(!value)throw new Error(message);}
+function canonical(value){if(Array.isArray(value))return value.map(canonical);if(object(value))return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])]));return value;}
+function same(left,right){return JSON.stringify(canonical(left))===JSON.stringify(canonical(right));}
+function zeroCounts(counts){return object(counts)&&COUNT_KEYS.every(key=>counts[key]===0);}
+function validateCommon(data){
+  requireValue(object(data)&&data.schema_version===SCHEMA,"回放格式版本不兼容，请刷新页面。");
+  requireValue(object(data.fixture)&&data.fixture.origin==="synthetic"&&typeof data.fixture.title==="string"&&typeof data.fixture.query==="string","必须是明确标记的教学合成快照。");
+  requireValue(zeroCounts(data.request_counts),"回放必须是零模型请求；已停止显示此响应。");
+  requireValue(Array.isArray(data.nodes)&&same(data.nodes.map(item=>item.id),NODE_ORDER),"节点顺序不符合本次最小实验。");
+  for(const item of data.nodes)requireValue(typeof item.label==="string"&&Array.isArray(item.reads)&&Array.isArray(item.writes)&&[...item.reads,...item.writes].every(key=>typeof key==="string")&&typeof item.operation==="string","节点说明不完整。");
+}
+function validatePlan(data){validateCommon(data);requireValue(typeof data.available==="boolean","依赖状态无效。");if(data.available)requireValue(typeof data.langgraph_version==="string","缺少 LangGraph 版本。");return data;}
+function validateReplay(data){
+  validateCommon(data);
+  requireValue(typeof data.langgraph_version==="string"&&object(data.graph)&&Array.isArray(data.graph.nodes)&&Array.isArray(data.graph.edges),"编译图信息缺失。");
+  const ids=["__start__",...NODE_ORDER,"__end__"];
+  requireValue(data.graph.nodes.length===ids.length&&new Set(data.graph.nodes.map(item=>item.id)).size===ids.length&&ids.every(id=>data.graph.nodes.some(item=>item.id===id&&typeof item.label==="string")),"编译图节点不符合线性流程。");
+  requireValue(data.graph.edges.length===ids.length-1&&ids.slice(0,-1).every((id,index)=>data.graph.edges.some(edge=>edge.source===id&&edge.target===ids[index+1])),"编译图边不符合线性流程。");
+  for(const [key,engine] of [["plain","python"],["langgraph","langgraph"]]){
+    const route=data[key];requireValue(object(route)&&route.engine===engine&&Array.isArray(route.events)&&route.events.length===NODE_ORDER.length&&object(route.final_state),"执行轨迹不完整。");
+    for(const [index,event] of route.events.entries()){
+      requireValue(object(event)&&event.step===index+1&&event.node===NODE_ORDER[index]&&object(event.before)&&object(event.update)&&object(event.after),"节点轨迹字段无效。");
+      requireValue(same({...event.before,...event.update},event.after),"状态合并结果与节点 update 不一致。");
+      if(index)requireValue(same(route.events[index-1].after,event.before),"相邻节点的共享状态不连续。");
+      else requireValue(event.before.query===data.fixture.query,"初始问题与合成快照不一致。");
+    }
+    requireValue(same(route.final_state,route.events.at(-1).after)&&Object.hasOwn(route.final_state,"answer"),"最终状态与执行轨迹不一致。");
+  }
+  const left=data.plain,right=data.langgraph;
+  requireValue(object(data.comparison)&&["same_steps","same_updates","same_final_state","same_answer"].every(key=>data.comparison[key]===true),"两路对照未通过，未展示为一致结果。");
+  requireValue(same(left.events.map(event=>event.node),right.events.map(event=>event.node))&&same(left.events.map(event=>event.update),right.events.map(event=>event.update))&&same(left.final_state,right.final_state)&&same(left.final_state.answer,right.final_state.answer),"两路结果不一致，不能标记为相同。");
+  return data;
+}
+function stringify(value){return JSON.stringify(value,null,2);}
+function setStatus(text){byId("status").textContent=text;}
+function showError(text){byId("error").textContent=text;byId("error").hidden=false;}
+function setBusy(value){state.busy=value;byId("run-button").disabled=value||!state.plan||!state.plan.available;byId("columns").setAttribute("aria-busy",String(value));updateNavigation();}
+function updateNavigation(){const count=state.data?state.data.nodes.length:0;byId("previous-button").disabled=state.busy||!count||state.step===0;byId("next-button").disabled=state.busy||!count||state.step===count-1;for(const button of byId("step-list").querySelectorAll("button"))button.disabled=state.busy;}
+function renderPlan(plan){
+  byId("fixture-title").textContent=plan.fixture.title;byId("query").textContent="问题："+plan.fixture.query;
+  if(typeof plan.fixture.notice==="string")byId("fixture-notice").textContent=plan.fixture.notice;
+  byId("version").textContent=plan.available?"LangGraph "+plan.langgraph_version:"LangGraph 依赖未就绪";
+  byId("graph-plan").textContent=plan.nodes.map((item,index)=>`${index+1}. ${item.label}（${item.operation}）`).join(" → ");
+  if(!plan.available)showError(typeof plan.dependency_message==="string"?plan.dependency_message:"请先安装锁定版本的 LangGraph 依赖。");
+}
+function renderDiagram(){
+  const graph=state.data.graph,container=byId("diagram"),lookup=new Map(graph.nodes.map(item=>[item.id,item])),order=["__start__"];
+  while(order.at(-1)!=="__end__")order.push(graph.edges.find(edge=>edge.source===order.at(-1)).target);
+  container.replaceChildren();
+  for(const [index,id] of order.entries()){
+    if(index)container.append(element("span","arrow","→"));
+    const terminal=id==="__start__"||id==="__end__",item=element(terminal?"span":"button","graph-node"+(terminal?" terminal":""));
+    item.dataset.node=id;const meta=state.data.nodes.find(node=>node.id===id);item.append(element("span","",meta?meta.label:lookup.get(id).label));
+    if(!terminal){item.type="button";item.append(element("small","",id));item.addEventListener("click",()=>selectStep(NODE_ORDER.indexOf(id)));}
+    container.append(item);
+  }
+  byId("graph-edges").textContent="编译边："+graph.edges.map(edge=>`${edge.source} → ${edge.target}`).join(" · ");
+}
+function codeLine(container,text,active=false,current=false){container.append(element("span","code-line"+(active?" active":"")+(current?" current":""),text));}
+function renderCode(nodeId){
+  const plain=byId("plain-code"),graph=byId("graph-code");plain.replaceChildren();graph.replaceChildren();
+  codeLine(plain,"state = {\"query\": snapshot.query}");
+  for(const id of NODE_ORDER)codeLine(plain,`state.update(${id}(state))`,id===nodeId);
+  codeLine(plain,"# 顺序与合并由调用者逐句执行");
+  codeLine(graph,"builder = StateGraph(ReplayState)");codeLine(graph,"for name, fn in shared_nodes:");codeLine(graph,"    builder.add_node(name, fn)");
+  codeLine(graph,"# 按上方编译图注册相邻边");codeLine(graph,"for source, target in edges:");codeLine(graph,"    builder.add_edge(source, target)");codeLine(graph,"app = builder.compile()");
+  codeLine(graph,"for kind, event in app.stream(initial_state,",false,true);codeLine(graph,"              stream_mode=[\"updates\", \"values\"]):",false,true);
+  codeLine(graph,`    # 本次事件：${nodeId}`,false,true);
+}
+function renderEvent(target,event){
+  const container=byId(target);container.replaceChildren();
+  for(const [key,label] of [["before","① before · 节点读取的共享状态"],["update","② update · 节点返回的更新"],["after","③ after · 合并后的共享状态"]]){
+    const box=element("details","phase"+(key==="update"?" update":""));box.open=key!=="before";box.append(element("summary","",label),element("pre","",stringify(event[key])));container.append(box);
+  }
+}
+function selectStep(index){
+  if(state.busy||!state.data||!Number.isInteger(index)||index<0||index>=state.data.nodes.length)return;
+  state.step=index;const meta=state.data.nodes[index],left=state.data.plain.events[index],right=state.data.langgraph.events[index];
+  byId("step-count").textContent=`${index+1} / ${state.data.nodes.length}`;
+  byId("step-description").textContent=`${meta.label} · ${meta.operation} ｜读取：${meta.reads.join("、")||"无"} ｜写入：${meta.writes.join("、")||"无"}`;
+  for(const button of byId("step-list").querySelectorAll("button")){const selected=Number(button.dataset.step)===index;button.classList.toggle("selected",selected);button.setAttribute("aria-pressed",String(selected));}
+  for(const item of byId("diagram").querySelectorAll(".graph-node")){const selected=item.dataset.node===meta.id;item.classList.toggle("selected",selected);if(item.tagName==="BUTTON")item.setAttribute("aria-pressed",String(selected));}
+  renderCode(meta.id);renderEvent("plain-event",left);renderEvent("langgraph-event",right);updateNavigation();
+}
+function renderReplay(data){
+  state.data=data;state.step=0;renderDiagram();byId("results").hidden=false;
+  byId("result-counts").textContent="本轮新增：Embedding 0 · 模型服务 HTTP 0 · Reranker 0 · 聊天 0";
+  const checks=byId("checks");checks.replaceChildren();for(const text of ["✓ 节点顺序相同","✓ 每步 update 相同","✓ 最终状态相同","✓ 答案相同"])checks.append(element("span","check",text));
+  const list=byId("step-list");list.replaceChildren();for(const [index,meta] of data.nodes.entries()){
+    const item=element("li",""),button=element("button","step-button",`${index+1}. ${meta.label}`);button.type="button";button.dataset.step=String(index);button.setAttribute("aria-controls","columns");button.append(element("span","",meta.id));button.addEventListener("click",()=>selectStep(index));item.append(button);list.append(item);
+  }
+  byId("answer").textContent=stringify(data.plain.final_state.answer);byId("plain-final").textContent=stringify(data.plain.final_state);byId("langgraph-final").textContent=stringify(data.langgraph.final_state);
+  byId("request-summary").textContent="本轮模型请求 0；点击下一步只切换显示，不发出请求。";
+  selectStep(0);
+}
+async function loadPlan(){
+  const sequence=++state.sequence;
+  try{
+    const response=await fetch("/api/workflow/plan",{method:"GET",mode:"same-origin",credentials:"same-origin",cache:"no-store"});
+    if(sequence!==state.sequence)return;
+    requireValue(response.ok,"无法读取本地计划，请确认服务已更新。");const data=validatePlan(await response.json());if(sequence!==state.sequence)return;
+    state.plan=data;renderPlan(data);setBusy(false);setStatus(data.available?"计划已就绪。点击按钮才会执行本地回放；所有模型请求为 0。":"依赖未就绪；尚未执行回放。");
+  }catch(error){if(sequence!==state.sequence)return;state.plan=null;setBusy(false);showError(error instanceof Error?error.message:"计划加载失败。");setStatus("尚未执行回放；未发送模型请求。");}
+}
+async function runReplay(){
+  if(state.busy||!state.plan||!state.plan.available)return;
+  const sequence=++state.sequence;state.data=null;byId("results").hidden=true;byId("error").hidden=true;byId("diagram").replaceChildren(element("p","notice","正在执行本地回放…"));byId("graph-edges").textContent="";setBusy(true);setStatus("两路正在服务端使用同一份合成快照执行；不调用模型。");
+  try{
+    const response=await fetch("/api/workflow/replay",{method:"POST",mode:"same-origin",credentials:"same-origin",cache:"no-store",headers:{"Content-Type":"application/json","X-Retrieval-Lab":"1"},body:"{}"});
+    if(sequence!==state.sequence)return;
+    requireValue(response.ok,"本地回放失败；没有自动重试。请查看服务端或依赖状态。");const data=validateReplay(await response.json());if(sequence!==state.sequence)return;
+    setBusy(false);renderReplay(data);setStatus("两路回放已完成并核对一致。下方可以逐步查看轨迹；模型请求为 0。");
+  }catch(error){if(sequence!==state.sequence)return;state.data=null;setBusy(false);showError(error instanceof Error?error.message:"本地回放失败。");setStatus("本轮未得到完整回放结果；没有自动重试，也未调用模型。");byId("diagram").replaceChildren(element("p","notice","尚无可展示的完整回放。"));}
+}
+byId("run-button").addEventListener("click",runReplay);
+byId("previous-button").addEventListener("click",()=>selectStep(state.step-1));
+byId("next-button").addEventListener("click",()=>selectStep(state.step+1));
+loadPlan();
+</script>
+</body>
+</html>

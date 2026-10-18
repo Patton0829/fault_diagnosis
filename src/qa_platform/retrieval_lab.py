@@ -22,6 +22,7 @@ from qa_platform.settings import DATA_DIR, PROJECT_ROOT
 DEFAULT_INDEX = DATA_DIR / "milvus_indexes" / "kubernetes_zh_v1"
 PAGE = PROJECT_ROOT / "web" / "retrieval_lab.html"
 EXPORT_SCRIPT = PROJECT_ROOT / "web" / "retrieval_export.js"
+WORKFLOW_PAGE = PROJECT_ROOT / "web" / "workflow_lab.html"
 
 
 class ComparisonRequest(BaseModel):
@@ -37,6 +38,12 @@ class RerankRequest(BaseModel):
 
 class AnswerRequest(RerankRequest):
     model: str = Field(min_length=1, max_length=80)
+
+
+class ReplayRequest(BaseModel):
+    """最小回放只接受空对象；不允许把路径、正文或服务地址交给后端。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
@@ -72,6 +79,17 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
         # 固定静态资源，不接收路径参数，不触发检索或模型调用。
         return FileResponse(EXPORT_SCRIPT, media_type="text/javascript")
 
+    @app.get("/workflow")
+    def workflow_page():
+        return FileResponse(WORKFLOW_PAGE)
+
+    @app.get("/api/workflow/plan")
+    def workflow_plan():
+        # 独立教学页不要求当前Milvus索引或真实问答快照已经就绪。
+        from qa_platform.workflows.replay import describe
+
+        return describe()
+
     @app.get("/api/plan")
     def plan():
         try:
@@ -102,6 +120,22 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
             return model.model_validate(json.loads(body))
         except (ValueError, UnicodeError, ValidationError):
             raise HTTPException(422, error_message) from None
+
+    @app.post("/api/workflow/replay")
+    async def workflow_replay(request: Request):
+        await read_payload(request, ReplayRequest, "回放只接受空JSON对象，不接受问题、路径、正文或模型参数。")
+        if not busy.acquire(blocking=False):
+            raise HTTPException(409, "当前有操作正在执行，请等待；未开始回放，也不会请求模型。")
+        try:
+            from qa_platform.workflows.replay import compare_replay
+
+            # 不读取或修改真实检索snapshot；既有回答和实验编号原样保留。
+            return await run_in_threadpool(compare_replay)
+        except Exception as exc:
+            print(f"[工作流回放未完成] {type(exc).__name__}；未调用模型。", flush=True)
+            raise HTTPException(503, "本地回放未完成，请检查LangGraph依赖或合成快照；未调用模型、未自动重试。") from None
+        finally:
+            busy.release()
 
     @app.post("/api/compare")
     async def compare(request: Request):
@@ -255,6 +289,7 @@ def main() -> int:
     print("[重排] 三路完成后可主动点击：固定同一并集，读密钥并向云端发送问题与正文，增加1次HTTP；可能收费。")
     print("[回答] 重排完成后另行确认：选前5块生成带引用的回答，增加1次HTTP；可选既有千问或GLM，GLM地址为HTTP明文。")
     print("[引用] 可单独预览按行/按段对照；只在本机计算，新增模型请求为0，不改原文或向量。")
+    print(f"[编排] http://127.0.0.1:{args.port}/workflow；独立教学合成快照，普通函数与LangGraph零模型回放。")
     print("[边界] 打开页面/普通检索不读.env、不请求云端；不重编码文档、不执行命令、不写报告，无自动重试。")
     uvicorn.run(create_app(), host="127.0.0.1", port=args.port, access_log=False)
     return 0

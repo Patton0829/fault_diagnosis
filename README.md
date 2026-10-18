@@ -4,6 +4,8 @@
 
 目前，铁路测试库已跑通最小 RAG 与 Milvus 对照链路；Kubernetes 当前11篇、156块已完成本地编码与独立 Milvus 入库，并提供真实问句检索、独立的相邻块上下文补全实验，以及浏览器中的BM25／Dense／RRF、云端重排和带引用回答。**网页按步骤显式运行：打开页面0模型，检索、重排、回答各自主动触发；没有标注评测，不把运行成功等同于答案正确。网页当前不混入上下文补全。**
 
+另有独立的 `/workflow` 学习页：普通Python与真实LangGraph的最小顺序编排，使用同一份教学合成快照进行零模型回放；尚未替换真实RAG、接入条件分支或持久化检查点。
+
 ## 目录结构
 
 ```text
@@ -19,6 +21,7 @@ fault_diagnosis/
 │       ├── retrieval/             # BM25、Dense、RRF和重排流水线
 │       ├── storage/               # 本地编码缓存、Milvus验证/建库/搜索
 │       ├── rag/                   # 回答、引用校验、评测和Milvus对照
+│       ├── workflows/             # 普通函数与LangGraph的零模型编排回放
 │       ├── web_app.py             # 文档处理可视化的后端
 │       └── retrieval_lab.py       # 独立检索学习台，不改变原清洗台的零模型约定
 ├── scripts/                      # 26个运行入口，不承载业务实现
@@ -320,6 +323,49 @@ python scripts/serve_retrieval_lab.py
 
 Python实现路径相对于 `src/qa_platform/`。检索、重排、回答分步进行，暂不混入上下文补全。服务仅监听127.0.0.1，要求同源JSON和自定义请求头，无CORS；同一时刻只允许一轮检索、重排或生成，不自动重试、不持久保存问题或报告。真实混合模式可能更新Milvus运行锁/日志，但不插入、修改或删除记录。检索中途失败时不展示部分或旧结果；重排／回答失败保留本轮已完成阶段，已发出的模型请求也不会被当作未发生。
 
+### LangGraph：普通函数与图编排的零模型回放
+
+仍使用同一个启动入口，另开 <http://127.0.0.1:8766/workflow>。本页不依赖Kubernetes索引就绪，不需要先检索、重排或生成回答；不会更改检索台当前实验快照。首次打开只GET本地计划，点击“运行两路零模型对照”才POST空对象执行两路回放。运行后点击流程节点、步骤或“下一步”，只是查看已完成轨迹，不再次执行节点或请求模型。
+
+本步验证并固定 **LangGraph 1.2.16**：截至2026-10-19的[PyPI最新稳定版本](https://pypi.org/project/langgraph/1.2.16/)，2026-10-16发布，支持Python≥3.10。[官方版本说明](https://github.com/langchain-ai/langgraph/releases/tag/1.2.16)。在指定Conda环境升级后，使用`pip check`与全量离线回归检查兼容性；该环境原有的LangChain 1.2.15限制LangGraph<1.2，因此同步升级LangChain到兼容的1.4.6。项目核心直接依赖仍是`langchain-core`；LangChain高层包不是本回放的必需调用组件。
+
+新的环境可先查看`python -m pip install --dry-run -e '.[workflow]'`的依赖计划，再安装；不要为追新而无差别升级整个环境。`pyproject.toml`只固定本步LangGraph入口版本，不是完整依赖锁文件。本页会显示实际安装版本；缺依赖时不提供伪造的LangGraph执行结果。
+
+**控制条件与真实执行边界：**
+
+| 节点 | 本步实际执行 |
+|---|---|
+| `retrieve` | 读取手工合成的BM25/Dense候选；不运行真实检索或问题编码 |
+| `fuse` | 调用已有`reciprocal_rank_fusion`，在本地重新计算RRF |
+| `rerank` | 读取合成分数，并对完整候选并集排序；不调用Reranker |
+| `prepare_evidence` | 选合成重排前2块，调用已有段落引用规则，构造S/Q字典 |
+| `generate` | 读取手工编写的回答草稿；没有模型推理或原始模型输出 |
+| `validate` | 调用已有`parse_answer`，真正检查JSON、状态规则及引用编号／原文定位 |
+
+快照中的正文、分数、草稿均为教学合成资料，不是用户上一轮的真实结果，也不证明模型能力。两路使用同一组节点函数，节点不原地改输入，只返回本步更新：
+
+- **普通Python：** 调用方在显式顺序列表里调用函数，再执行`state.update(update)`，并自行记录轨迹。
+- **LangGraph：** `ReplayState`声明共享状态；`add_node`注册相同函数；`add_edge`声明顺序；`compile`构建运行器；`stream`产生节点更新与合并后的状态。没有自定义reducer时，各字段按覆盖方式更新。
+- 每条轨迹保存`before`（读入状态）、`update`（节点返回值）、`after`（合并后状态）。图路线的`after`来自LangGraph实际`values`事件，不是浏览器拼出来的假状态；页面流程图也来自实际编译图，不请求外部绘图服务。
+- 两路对照检查节点顺序、每步更新、最终状态及答案相同；相同是固定输入下预期的编排等价结果，**不是准确率、性能提升或“LangGraph更聪明”的证明**。普通Python也能实现分支、日志和状态管理，LangGraph提供统一的图调度机制。
+
+本页模型请求为0：Embedding、Reranker、聊天、模型服务HTTP均为0；浏览器与127.0.0.1的页面/API通信另计。不加载`.env`、不创建模型或Milvus客户端、不读写向量缓存或报告。执行期间显式关闭LangSmith tracing，即使环境中已开启追踪也不外发。此步没有条件分支、自动重试、checkpointer、跨进程恢复或多轮记忆；这些能力不能仅凭采用LangGraph就算已经完成。
+
+**按文件阅读：**
+
+| 文件 | 为什么需要／输入与输出 |
+|---|---|
+| `src/qa_platform/workflows/__init__.py` | 将工作流目录声明为Python包；不执行回放或联网 |
+| `src/qa_platform/workflows/replay_fixture.json` | 手工合成的文档、召回、重排分数和草稿，固定两路输入；不包含密钥或真实调用结果 |
+| `src/qa_platform/workflows/replay.py` | 核心课件：`ReplayState`→共享节点→普通执行器/StateGraph→两路轨迹与一致性结果；优先阅读`make_nodes`、`_run_plain`、`build_graph`、`_run_langgraph` |
+| `src/qa_platform/retrieval_lab.py` | 新增固定页面、只读计划和空请求回放接口；复用同源/JSON/大小限制/串行锁，不改变真实检索快照 |
+| `web/workflow_lab.html` | 将真实回放轨迹渲染为两路代码示意、流程节点及状态对照；切换步骤零请求，所有资料按文字展示 |
+| `web/retrieval_lab.html` | 只增加另开工作流学习页的链接，原有检索/重排/回答逻辑不变 |
+| `tests/test_workflow_replay.py` | 验证真实图执行、状态隔离、错误停止、零模型/追踪外发、API门禁及原快照保留 |
+| `tests/workflow_lab.test.cjs` | 验证页面合同、流程图、步骤切换、重复点击/失败、响应校验及文字安全展示 |
+| `tests/test_workflow_lab_ui.py` | 将上述Node前端回归纳入pytest；没有Node时明确跳过 |
+| `pyproject.toml` | 声明可选`workflow`依赖及合成JSON包资源；不自动安装或升级环境 |
+
 ### 校验现有 Kubernetes v2 语料
 
 ```bash
@@ -431,8 +477,8 @@ v2 的清单记录了迁移前四份规则源码的完整 SHA256。直接更改�
 本机 `docs/learning/` 留有BM25和Milvus笔记；`docs/reference/` 留有个人参考资料，不包含在公开仓库中。
 公开配置参考 [模型接口说明](docs/model_apis/README.md)。
 
-当前学习路线：模型调用 → 文档处理 → BM25／Dense → RRF → Reranker → 最小RAG → 开发回归 → Milvus对照 → Kubernetes语料与可视化 → 本地Embedding小样本 → 编码缓存续跑 → 缓存向量独立入库 → 真实问句检索对照 → 相邻块上下文补全。
+当前学习路线：模型调用 → 文档处理 → BM25／Dense → RRF → Reranker → 最小RAG → 开发回归 → Milvus对照 → Kubernetes语料与可视化 → 本地Embedding小样本 → 编码缓存续跑 → 缓存向量独立入库 → 真实问句检索对照 → 相邻块上下文补全实验 → 全池重排 → 带段落引用回答 → LangGraph最小零模型编排。
 
-当前先在页面上比较BM25、Dense与RRF的候选和依据，确认理解后再接云端重排与回答。Kubernetes端到端RAG、跨版本增量更新、LangGraph编排和正式应用界面仍尚未完成。
+当前Kubernetes子集已跑通检索、全池重排与带引用回答；工作流学习页已实现普通函数与LangGraph的最小顺序回放，尚未接管真实RAG。后续仍需人工／标注质量验证、真实RAG图编排、条件分支、多轮会话、跨版本增量更新和正式应用／部署；不把本步线性图视为这些能力已完成。
 
 学习过程中，每增加一份实现文件都说明其输入、输出、职责和调用关系；对比实验应固定控制条件，不将“能运行”“排序一致”或“自动检查通过”直接当作问答正确率。
