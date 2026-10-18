@@ -4,7 +4,7 @@
 
 目前，铁路测试库已跑通最小 RAG 与 Milvus 对照链路；Kubernetes 当前11篇、156块已完成本地编码与独立 Milvus 入库，并提供真实问句检索、独立的相邻块上下文补全实验，以及浏览器中的BM25／Dense／RRF、云端重排和带引用回答。**网页按步骤显式运行：打开页面0模型，检索、重排、回答各自主动触发；没有标注评测，不把运行成功等同于答案正确。网页当前不混入上下文补全。**
 
-另有独立的 `/workflow` 线性学习页和简化的 `/workflow/branching` 条件分支页：普通Python与真实LangGraph使用同一份教学合成快照进行零模型回放；尚未替换真实RAG或接入持久化检查点。
+另有独立的 `/workflow` 线性对照页和简化的 `/workflow/branching` 条件分支页。条件页只运行和展示LangGraph，按明确的源码阅读顺序学习建图；尚未替换真实RAG或接入持久化检查点。
 
 ## 目录结构
 
@@ -392,9 +392,9 @@ Python实现路径相对于 `src/qa_platform/`。检索、重排、回答分步�
 | `tests/test_workflow_lab_ui.py` | 将上述Node前端回归纳入pytest；没有Node时明确跳过 |
 | `pyproject.toml` | 声明可选`workflow`依赖及合成JSON包资源；不自动安装或升级环境 |
 
-#### 下一课：最小条件分支（简化对照台）
+#### 下一课：最小条件分支与建图阅读顺序
 
-打开 <http://127.0.0.1:8766/workflow/branching>，仍使用原启动命令和LangGraph 1.2.16，不新增依赖。主界面只保留场景选择、实际分支图、当前步骤对照；真实源码和完整JSON收进默认折叠区。原线性页保留，便于回看，不把两个实验堆在一个界面里。
+打开 <http://127.0.0.1:8766/workflow/branching>，仍使用原启动命令和LangGraph 1.2.16，不新增依赖。主界面只保留场景选择、实际分支图、当前LangGraph步骤；不再展示或执行普通Python路线。真实源码和完整JSON收进默认折叠区，原线性对照页保留为上一课。
 
 先选“有候选资料”运行，再选“召回为空”运行。后者保持同一问题和资料，只将BM25/Dense的合成召回列表置空；清空是受控实验条件，不是对真实模型的质量结论。更换场景立即清除旧结果，必须主动运行才产生新轨迹。
 
@@ -403,15 +403,27 @@ Python实现路径相对于 `src/qa_platform/`。检索、重排、回答分步�
 | 有候选资料 | `generate → validate`；读取原合成草稿 | `refuse` |
 | 召回为空 | `refuse → validate`；固定模板、空claims及资料缺口 | `generate` |
 
-共同前四步仍是`retrieve → fuse → rerank → prepare_evidence`。`route_after_evidence(state)`只检查证据字典是否非空，返回`generate`或`refuse`，**不写状态**；路由函数不是新的状态节点。普通Python在调用方用`if/else`选择节点，LangGraph用`add_conditional_edges`注册同一判断，运行器按返回值选择下一条边。两个分支都注册在编译图中，但一轮只执行其中一个；图中“未执行”不能当成执行过的轨迹。该用法参见[官方条件边说明](https://docs.langchain.com/oss/python/langgraph/graph-api#conditional-edges)。
+共同前四步仍是`retrieve → fuse → rerank → prepare_evidence`。`route_after_evidence(state)`只检查证据字典是否非空，返回`generate`或`refuse`，**不写状态**；路由函数不是新的状态节点。LangGraph用`add_conditional_edges`注册该判断，运行器按返回值选择下一条边。两个分支都注册在编译图中，但一轮只执行其中一个；图中“未执行”不能当成执行过的轨迹。该用法参见[官方条件边说明](https://docs.langchain.com/oss/python/langgraph/graph-api#conditional-edges)。
 
-本课最重要的边界：**非空不等于相关、充分、可信**；没有用任意重排阈值代替证据审核。固定拒答是正常空证据路径，不是程序异常兜底。结构或引用校验失败仍报错停止，既不重试，也不悄悄转为成功拒答。两路均使用同一批函数，比较实际节点顺序、每步更新、路由观察、最终状态和答案；图路线的状态仍取自真实stream values。
+本课最重要的边界：**非空不等于相关、充分、可信**；没有用任意重排阈值代替证据审核。固定拒答是正常空证据路径，不是程序异常兜底。结构或引用校验失败仍报错停止，既不重试，也不悄悄转为成功拒答。页面入口`run_replay`只执行一次LangGraph；原`compare_replay`保留给离线回归核对，不被本页API调用，也不返回其普通Python轨迹。图路线的状态仍取自真实stream values。
+
+展开代码区后，先按编号阅读，不必自己猜下拉框顺序。这里是**源码阅读顺序**，不是节点执行顺序；“源码下一步”也不会推进图或重新请求接口。
+
+1. `replay.py → ReplayState`：先知道共享状态能装什么；类型声明不等于已经有值。
+2. `replay.py → make_nodes`：看六个基础函数如何定义、各自返回什么更新，最后如何放进字典。初读可先跳过具体计算细节。
+3. `branching.py → make_nodes`：复用上述函数，加上`refuse`绑定，组成七个节点的注册表；返回函数对象不是调用函数。
+4. `branching.py → route_after_evidence`：了解条件判断的输入和两个返回值；它选择后继，不产生节点更新。
+5. `branching.py → build_graph`：按真实源码中的六条编号注释读：`StateGraph`创建构建器 → `add_node`注册 → 固定边 → 条件边 → 汇合和END → `compile`。编译到此完成，仍未执行节点。
+6. `branching.py → run_replay`：回到页面实际入口，看固定输入、注册表、图、执行器和输出如何连起来。`_observe_router`只是路由日志包装，不改变判断规则。
+7. `branching.py → _run_langgraph`：重点看`graph.stream`才真正开始执行；`updates`是节点返回值，`values`是框架合并后的状态。其余代码主要负责轨迹记录和一致性检查。
+
+每步显示一个阅读目标并提供源码“上一步／下一步”。“当前节点函数”是补充入口，随图中所选执行节点变化；不会打乱上述阅读进度。先理解**定义 → 注册 → 连边 → 编译 → 执行**这条主线，再深入节点计算。
 
 新增/修改文件的学习职责：
 
-- `src/qa_platform/workflows/branching.py`：复用上一课的状态与六个节点，加固定拒答、纯路由函数、Python条件执行器和真正的条件图；记录路由实际输入数量及输出，不重新执行路由来拼造日志。
+- `src/qa_platform/workflows/branching.py`：复用上一课的状态与六个节点，加固定拒答、纯路由函数和真正的条件图；页面走`run_replay`，只读提取七步涉及的真实源码。旧Python条件执行器仅供自动测试。
 - `src/qa_platform/retrieval_lab.py`：只增加固定页面、只读计划和场景回放接口。POST仅允许`scenario`枚举，沿用同源、JSON、16KiB及同一个串行锁；不改变真实检索实验快照。
-- `web/branching_lab.html`：绘制实际编译图、标记本轮经过/跳过的节点，切换已完成步骤；展开时才显示代码和完整状态。浏览器切换步骤不新增请求。
+- `web/branching_lab.html`：只显示LangGraph的图和当前步骤，按七步阅读路线切换源码；展开时才显示代码和完整状态。源码阅读导航与执行步骤导航相互独立，不新增请求。
 - `tests/test_workflow_branching.py`：离线验证两种分支、未选节点确实不运行、真实图/状态/源码、零外部IO以及API门禁。
 - `tests/branching_lab.test.cjs`、`tests/test_branching_lab_ui.py`：检查场景切换清空旧结果、默认折叠、分支展示、响应校验与安全文本，并接入pytest。
 

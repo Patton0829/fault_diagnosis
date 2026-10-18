@@ -165,10 +165,10 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
         if not busy.acquire(blocking=False):
             raise HTTPException(409, "当前有操作正在执行；未开始条件回放，也不会请求模型。")
         try:
-            from qa_platform.workflows.branching import compare_replay
+            from qa_platform.workflows.branching import run_replay
 
             # 与原线性课件一样，不接管或清除真实检索snapshot。
-            return await run_in_threadpool(compare_replay, payload.scenario)
+            return await run_in_threadpool(run_replay, payload.scenario)
         except Exception as exc:
             print(f"[条件回放未完成] {type(exc).__name__}；未调用模型。", flush=True)
             raise HTTPException(503, "本地条件回放未完成；未调用模型、未自动重试，也未把异常当作正常拒答。") from None

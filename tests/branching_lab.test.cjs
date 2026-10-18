@@ -10,6 +10,7 @@ const page = fs.readFileSync(path.join(__dirname, "../web/branching_lab.html"), 
 const script = page.match(/<script>([\s\S]*?)<\/script>/)[1];
 const PREFIX = ["retrieve", "fuse", "rerank", "prepare_evidence"];
 const NODES = [...PREFIX, "generate", "refuse", "validate"];
+const SOURCE_ORDER = ["state", "base_factory", "factory", "router", "graph_builder", "entry", "runner"];
 const clone = value => JSON.parse(JSON.stringify(value));
 const SCENARIOS = [
   { id: "with_evidence", label: "有候选资料", description: "非空不等于可靠。" },
@@ -21,10 +22,12 @@ function definitions() {
     file: `src/qa_platform/workflows/${file}`, start_line, end_line: start_line + code.split("\n").length - 1 });
   return {
     state: source("ReplayState", "class ReplayState(TypedDict, total=False):\n    evidence: dict", "replay.py"),
+    base_factory: source("make_nodes", "def make_nodes(fixture):\n    return base_nodes", "replay.py"),
     router: source("route_after_evidence", 'def route_after_evidence(state):\n    return "generate" if state["evidence"] else "refuse"'),
     factory: source("make_nodes", "def make_nodes(fixture):\n    return shared_nodes"),
-    plain: source("_run_plain", 'def _run_plain(fixture, nodes):\n    if target == "generate":\n        call("generate")\n    else:\n        call("refuse")'),
     graph_builder: source("build_graph", 'def build_graph(fixture):\n    builder.add_conditional_edges("prepare_evidence", route_after_evidence)\n    return builder.compile()'),
+    entry: source("run_replay", "def run_replay(scenario):\n    return _run_langgraph(fixture, graph)"),
+    runner: source("_run_langgraph", 'def _run_langgraph(fixture, graph):\n    for update in graph.stream(initial_state):\n        events.append(update)'),
     nodes: Object.fromEntries(NODES.map(id => [id, source(id, `def ${id}(state):\n    return {}`, id === "refuse" ? "branching.py" : "replay.py")])),
   };
 }
@@ -50,7 +53,7 @@ function fixture(scenario = "with_evidence") {
     reason: target === "generate" ? "证据字典非空，进入草稿回放；尚未判定质量。" : "证据字典为空，跳过草稿回放，使用固定拒答。" }];
   const edges = [["__start__", "retrieve"], ["retrieve", "fuse"], ["fuse", "rerank"], ["rerank", "prepare_evidence"],
     ["prepare_evidence", "generate"], ["prepare_evidence", "refuse"], ["generate", "validate"], ["refuse", "validate"], ["validate", "__end__"]];
-  return { schema_version: "rag-workflow-branching/v1", langgraph_version: "1.2.16", scenarios: clone(SCENARIOS),
+  return { schema_version: "rag-workflow-branching/v2", langgraph_version: "1.2.16", scenarios: clone(SCENARIOS),
     scenario: clone(SCENARIOS.find(item => item.id === scenario)),
     fixture: { id: "dns-teaching-v1", title: "教学合成 <img onerror=alert(1)>", origin: "synthetic", query: "Pod 中 DNS 如何排查？", notice: "合成数据，非现场规程。" },
     nodes: NODES.map((id, index) => ({ id, label: `节点 ${id}`, reads: [index === 0 ? "query" : "evidence"], writes: [id === "validate" ? "answer" : "evidence"], operation: "合成回放" })),
@@ -58,15 +61,13 @@ function fixture(scenario = "with_evidence") {
     request_counts: { embedding: 0, http: 0, reranker: 0, chat: 0 },
     graph: { nodes: ["__start__", ...NODES, "__end__"].map(id => ({ id, label: id })),
       edges: edges.map(([source, target]) => ({ source, target, conditional: source === "prepare_evidence" })) },
-    plain: { engine: "python", events: clone(events), decisions: clone(decisions), final_state: clone(current) },
     langgraph: { engine: "langgraph", events: clone(events), decisions: clone(decisions), final_state: clone(current) },
-    comparison: { same_steps: true, same_updates: true, same_final_state: true, same_answer: true, same_decisions: true },
   };
 }
 
 function plan() {
   const data = fixture();
-  for (const key of ["scenario", "graph", "plain", "langgraph", "comparison"]) delete data[key];
+  for (const key of ["scenario", "graph", "langgraph"]) delete data[key];
   return { ...data, available: true, dependency_message: "沿用验证版本，不自动安装。" };
 }
 
@@ -109,7 +110,7 @@ function harness({ planData = plan(), postData = null, failPlan = false, failPos
     return [match[3], item];
   }));
   elements.get("scenario-select").value = "with_evidence";
-  elements.get("source-select").value = "router";
+  elements.get("source-select").value = "state";
   const calls = []; const pending = [];
   const fetch = async (url, options) => {
     calls.push({ url, options });
@@ -147,7 +148,8 @@ test("initial load fetches only the plan, not a replay or any model endpoint", a
 test("source and complete states are folded by default, keeping the main exercise compact", () => {
   const details = [...page.matchAll(/<details\b([^>]*)>/g)];
   assert(details.length >= 2); assert(details.every(match => !/\bopen\b/.test(match[1])));
-  assert(page.includes('id="plain-update"')); assert(page.includes('id="langgraph-update"'));
+  assert(!page.includes('id="plain-update"')); assert(page.includes('id="langgraph-update"'));
+  assert(!page.includes('<option value="plain">'));
 });
 
 test("one click sends exactly one guarded, scenario-scoped same-origin POST", async () => {
@@ -157,7 +159,9 @@ test("one click sends exactly one guarded, scenario-scoped same-origin POST", as
   assert.equal(call.options.credentials, "same-origin"); assert.equal(call.options.headers["X-Retrieval-Lab"], "1");
   assert.equal(call.options.headers["Content-Type"], "application/json");
   assert.deepEqual(JSON.parse(call.options.body), { scenario: "with_evidence" });
-  assert.equal(h.get("results").hidden, false); assert(h.get("checks").textContent.includes("路由记录一致"));
+  assert.equal(h.get("results").hidden, false); assert(h.get("checks").textContent.includes("轨迹技术检查通过"));
+  assert(h.get("checks").textContent.includes("不代表"));
+  assert(!h.get("checks").textContent.includes("两路"));
   assert.equal(h.get("step-count").textContent, "4 / 6");
 });
 
@@ -172,7 +176,7 @@ for (const [scenario, used, skipped] of [["with_evidence", "generate", "refuse"]
     assert.equal(skippedNode.listeners.click, undefined); assert(skippedNode.textContent.includes("未执行"));
     usedNode.listeners.click(); assert.equal(h.get("step-count").textContent, "5 / 6");
     assert(h.get("step-title").textContent.includes(used)); assert.equal(h.calls.length, 2);
-    assert.equal(h.get("plain-update").textContent, h.get("langgraph-update").textContent);
+    assert.deepEqual(JSON.parse(h.get("langgraph-update").textContent), fixture(scenario).langgraph.events[4].update);
     assert(h.get("decision").textContent.includes(scenario === "with_evidence" ? "非空" : "为空"));
   });
 }
@@ -228,7 +232,7 @@ test("changing scenario immediately clears old answer, steps, graph and complete
   h.scenario("empty_evidence");
   assert.equal(h.calls.length, count); assert.equal(h.eval("state.data"), null);
   assert.equal(h.get("results").hidden, true); assert.equal(h.get("diagram").querySelectorAll(".graph-node").length, 0);
-  assert(!h.get("full-json").textContent.includes("demo-namespace")); assert.equal(h.get("plain-update").textContent, "");
+  assert(!h.get("full-json").textContent.includes("demo-namespace")); assert.equal(h.get("langgraph-update").textContent, "");
   await h.eval("runReplay()"); assert.equal(JSON.parse(h.calls.at(-1).options.body).scenario, "empty_evidence");
   assert(h.get("decision").textContent.includes("为空"));
 });
@@ -269,18 +273,77 @@ test("HTTP failure clears the old state, resets controls and does not automatica
 test("read-only definitions preserve literal hostile text without HTML interpretation", async () => {
   const data = plan(); data.definitions.router.code += '\n    # <svg onload="throw 1">'; data.definitions.router.end_line += 1;
   const h = harness({ planData: data }); await settle();
+  h.get("source-select").value = "router"; h.get("source-select").listeners.change();
   assert(h.get("source-code").textContent.includes('<svg onload="throw 1">'));
   assert(h.get("source-location").textContent.includes("src/qa_platform/workflows/branching.py"));
   assert(h.get("fixture-title").textContent.includes("<img onerror")); assert.equal(h.calls.length, 1);
 });
 
-test("source selector shows actual router, Python branch and conditional builder without network", async () => {
+test("source selector shows the seven construction stages in explicit reading order without network", async () => {
   const h = harness(); await settle(); const count = h.calls.length;
-  for (const [key, text] of [["plain", "if target"], ["graph_builder", "add_conditional_edges"], ["state", "total=False"]]) {
+  const options = [...page.matchAll(/<option value="([^"]+)">/g)].map(match => match[1]).filter(key => SOURCE_ORDER.includes(key));
+  assert.deepEqual(options, SOURCE_ORDER);
+  for (const [key, text] of [["state", "total=False"], ["base_factory", "base_nodes"], ["factory", "shared_nodes"],
+    ["router", "route_after_evidence"], ["graph_builder", "add_conditional_edges"], ["entry", "run_replay"], ["runner", "graph.stream"]]) {
     h.get("source-select").value = key; h.get("source-select").listeners.change();
     assert(h.get("source-code").textContent.includes(text));
+    assert(h.get("source-goal").textContent.trim().length > 10, key);
+    assert(h.get("source-progress").textContent.includes(String(SOURCE_ORDER.indexOf(key) + 1)), key);
   }
   assert.equal(h.calls.length, count);
+});
+
+test("first source is ReplayState and seven previous/next reading stages work before execution", async () => {
+  const h = harness(); await settle();
+  assert.equal(h.get("source-select").value, "state");
+  assert(h.get("source-code").textContent.includes("class ReplayState"));
+  assert.equal(h.get("source-prev").disabled, true);
+  assert.equal(h.get("source-next").disabled, false);
+  for (const key of SOURCE_ORDER.slice(1)) {
+    h.get("source-next").listeners.click();
+    assert.equal(h.get("source-select").value, key);
+    assert.equal(h.eval("state.data"), null);
+  }
+  assert.equal(h.get("source-next").disabled, true);
+  for (const key of SOURCE_ORDER.slice(0, -1).reverse()) {
+    h.get("source-prev").listeners.click(); assert.equal(h.get("source-select").value, key);
+  }
+  assert.equal(h.get("source-prev").disabled, true); assert.equal(h.calls.length, 1);
+});
+
+test("reading navigation never changes the selected execution step or scenario", async () => {
+  const h = await run(); const step = h.get("step-count").textContent; const count = h.calls.length;
+  h.get("source-next").listeners.click(); h.get("source-next").listeners.click();
+  assert.equal(h.get("source-select").value, "factory");
+  assert.equal(h.get("step-count").textContent, step);
+  assert.equal(h.get("scenario-select").value, "with_evidence");
+  const generate = h.get("diagram").querySelectorAll(".graph-node").find(item => item.dataset.node === "generate");
+  generate.listeners.click();
+  assert.equal(h.get("step-count").textContent, "5 / 6");
+  assert.equal(h.get("source-select").value, "factory");
+  assert(h.get("source-code").textContent.includes("return shared_nodes"));
+  assert.equal(h.calls.length, count);
+});
+
+test("changing scenario and rerunning clear the old trace but preserve chosen reading stage", async () => {
+  const h = await run();
+  h.get("source-select").value = "graph_builder"; h.get("source-select").listeners.change();
+  h.scenario("empty_evidence");
+  assert.equal(h.get("source-select").value, "graph_builder");
+  assert.equal(h.get("results").hidden, true); assert(h.get("source-code").textContent.includes("add_conditional_edges"));
+  await h.eval("runReplay()");
+  assert.equal(h.get("source-select").value, "graph_builder");
+  assert.equal(h.eval("state.data.scenario.id"), "empty_evidence");
+  assert.equal(h.calls.length, 3);
+});
+
+test("complete response JSON contains only the LangGraph route, without a hidden Python comparison", async () => {
+  const h = await run(); const data = JSON.parse(h.get("full-json").textContent);
+  assert.equal(data.schema_version, "rag-workflow-branching/v2");
+  assert.equal(data.langgraph.engine, "langgraph");
+  assert(!Object.hasOwn(data, "plain")); assert(!Object.hasOwn(data, "comparison"));
+  assert(!Object.hasOwn(data.definitions, "plain"));
+  assert.deepEqual(data.langgraph.events.map(item => item.node), [...PREFIX, "generate", "validate"]);
 });
 
 test("current-node source follows the executed refusal branch, not the skipped generate function", async () => {
@@ -294,8 +357,8 @@ test("current-node source follows the executed refusal branch, not the skipped g
 
 test("literal answer strings remain data when displayed in updates or complete JSON", async () => {
   const h = await run(); h.eval("selectStep(4)");
-  assert(h.get("plain-update").textContent.includes("<script>throw 1</script>"));
-  assert.equal(h.get("plain-update").children.length, 0);
+  assert(h.get("langgraph-update").textContent.includes("<script>throw 1</script>"));
+  assert.equal(h.get("langgraph-update").children.length, 0);
   assert(h.get("full-json").textContent.includes("<img onerror=alert(1)>"));
   assert.equal(h.get("full-json").children.length, 0);
 });
@@ -305,6 +368,11 @@ for (const [label, mutate] of [
   ["nonzero HTTP count", data => { data.request_counts.http = 1; }],
   ["unknown scenario", data => { data.scenarios[0].id = "arbitrary"; }],
   ["missing router definition", data => { delete data.definitions.router; }],
+  ["missing base factory definition", data => { delete data.definitions.base_factory; }],
+  ["missing entry definition", data => { delete data.definitions.entry; }],
+  ["missing runner definition", data => { delete data.definitions.runner; }],
+  ["wrong source binding", data => { data.definitions.entry.name = "_run_plain"; }],
+  ["source function text mismatches name", data => { data.definitions.entry.code = data.definitions.entry.code.replace("def run_replay", "def arbitrary"); }],
   ["external source path", data => { data.definitions.state.file = "../../secrets.py"; }],
 ]) {
   test(`invalid plan ${label} disables execution without a POST`, async () => {
@@ -318,6 +386,9 @@ for (const [label, mutate] of [
   ["schema", data => { data.schema_version = "future"; }],
   ["live origin", data => { data.fixture.origin = "live"; }],
   ["nonzero model count", data => { data.request_counts.chat = 1; }],
+  ["wrong engine", data => { data.langgraph.engine = "python"; }],
+  ["old hidden Python route", data => { data.plain = clone(data.langgraph); }],
+  ["old hidden comparison", data => { data.comparison = { same_steps: true }; }],
   ["wrong returned scenario", data => { data.scenario = clone(SCENARIOS[1]); }],
   ["missing branch node", data => { data.graph.nodes = data.graph.nodes.filter(node => node.id !== "refuse"); }],
   ["missing conditional edge", data => { data.graph.edges = data.graph.edges.filter(edge => edge.target !== "refuse"); }],
@@ -326,16 +397,16 @@ for (const [label, mutate] of [
   ["duplicate graph node", data => { data.graph.nodes[1].id = "__start__"; }],
   ["executed both branches", data => { data.langgraph.events.splice(5, 0, clone(data.langgraph.events[4])); }],
   ["wrong route decision", data => { data.langgraph.decisions[0].target = "refuse"; }],
-  ["forged evidence count", data => { data.plain.decisions[0].evidence_count = 0; }],
-  ["false comparison", data => { data.comparison.same_decisions = false; }],
-  ["forged final-state equality", data => { data.langgraph.final_state.answer.claims[0].text = "different"; }],
-  ["broken merge", data => { data.plain.events[0].after.extra = "not returned by update"; }],
-  ["broken continuity", data => { data.plain.events[1].before.query = "different"; }],
+  ["forged evidence count", data => { data.langgraph.decisions[0].evidence_count = 0; }],
+  ["forged final state", data => { data.langgraph.final_state.answer.claims[0].text = "different"; }],
+  ["broken merge", data => { data.langgraph.events[0].after.extra = "not returned by update"; }],
+  ["broken continuity", data => { data.langgraph.events[1].before.query = "different"; }],
   ["wrong initial query", data => { data.fixture.query = "different"; }],
   ["unknown source path", data => { data.definitions.router.file = "/etc/passwd"; }],
   ["bad source line range", data => { data.definitions.router.end_line = 1; }],
+  ["missing guided source", data => { delete data.definitions.entry; }],
 ]) {
-  test(`rejects ${label} without rendering a successful comparison`, async () => {
+  test(`rejects ${label} without rendering a successful LangGraph trace`, async () => {
     const data = fixture(); mutate(data); const h = await run({ postData: data });
     assert.equal(h.eval("state.data"), null); assert.equal(h.get("results").hidden, true);
     assert.equal(h.get("error").hidden, false); assert.equal(h.calls.length, 2);

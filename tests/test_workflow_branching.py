@@ -1,4 +1,4 @@
-"""Conditional Python/LangGraph lesson; all examples stay offline and synthetic.
+"""Guided LangGraph lesson plus retained offline scheduler comparisons.
 
 These tests prove real branch selection, state propagation and API isolation.
 They do not treat a nonempty evidence dictionary as a relevance or quality test.
@@ -140,7 +140,7 @@ def test_fixture_scenarios_change_only_the_two_recall_lists():
 def test_unknown_scenario_is_rejected_before_reading_fixture(monkeypatch, scenario):
     fixture_reader = Mock(side_effect=AssertionError("Invalid scenario must fail before fixture IO"))
     monkeypatch.setattr(replay, "load_fixture", fixture_reader)
-    for function in (branching.load_fixture, branching.compare_replay):
+    for function in (branching.load_fixture, branching.compare_replay, branching.run_replay):
         with pytest.raises(ValueError, match="场景"):
             function(scenario)
     fixture_reader.assert_not_called()
@@ -148,14 +148,14 @@ def test_unknown_scenario_is_rejected_before_reading_fixture(monkeypatch, scenar
 
 def test_plan_reports_available_dependency_and_zero_request_boundaries():
     plan = branching.describe()
-    assert plan["schema_version"] == branching.SCHEMA == "rag-workflow-branching/v1"
+    assert plan["schema_version"] == branching.SCHEMA == "rag-workflow-branching/v2"
     assert plan["available"] is True
     assert isinstance(plan["langgraph_version"], str)
     assert plan["fixture"]["origin"] == "synthetic"
     assert [row["id"] for row in plan["nodes"]] == NODE_IDS
     assert [row["id"] for row in plan["scenarios"]] == list(SCENARIOS)
     assert plan["request_counts"] == ZERO_REQUESTS
-    for phrase in ("非空证据", "不是证据质量", "普通Python", "if/else", "不读.env", "不连接Milvus", "不外发LangSmith"):
+    for phrase in ("非空证据", "不是证据质量", "只运行和展示LangGraph", "不读.env", "不连接Milvus", "不外发LangSmith"):
         assert phrase in plan["notice"]
 
 
@@ -176,12 +176,14 @@ def test_plan_extracts_source_without_executing_router_nodes_or_graph(monkeypatc
     make_spy = Mock(side_effect=observed_make)
     make_spy.__wrapped__ = original_make
     monkeypatch.setattr(branching, "make_nodes", make_spy)
-    for name in ("route_after_evidence", "_run_plain", "build_graph", "_run_langgraph"):
+    for name in ("route_after_evidence", "_run_plain", "build_graph", "_run_langgraph", "run_replay"):
         wrapped = Mock(side_effect=forbidden)
         wrapped.__wrapped__ = getattr(branching, name)
         monkeypatch.setattr(branching, name, wrapped)
     plan = branching.describe()
     assert plan["definitions"]["router"]["name"] == "route_after_evidence"
+    assert plan["definitions"]["runner"]["name"] == "_run_langgraph"
+    assert plan["definitions"]["entry"]["name"] == "run_replay"
     assert plan["request_counts"] == ZERO_REQUESTS
     assert make_spy.call_count == 1
     forbidden.assert_not_called()
@@ -216,6 +218,81 @@ def test_both_schedulers_execute_the_same_selected_six_nodes_and_decision(scenar
     assert result["request_counts"] == ZERO_REQUESTS
     assert fixture == before
     assert not any(key in result for key in ("accuracy", "performance", "speedup"))
+
+
+@pytest.mark.parametrize("scenario", SCENARIOS)
+def test_page_runner_executes_only_langgraph_and_returns_no_python_comparison(monkeypatch, scenario):
+    forbidden = Mock(side_effect=AssertionError("Page must not execute the Python scheduler"))
+    monkeypatch.setattr(branching, "_run_plain", forbidden)
+    monkeypatch.setattr(branching, "run_plain", forbidden)
+    monkeypatch.setattr(branching, "compare_replay", forbidden)
+    fixture = branching.load_fixture(scenario)
+    result = branching.run_replay(scenario)
+    assert result["schema_version"] == "rag-workflow-branching/v2"
+    assert result["scenario"]["id"] == scenario
+    assert result["langgraph"]["engine"] == "langgraph"
+    assert_route(result["langgraph"], fixture, scenario)
+    assert result["request_counts"] == ZERO_REQUESTS
+    assert "plain" not in result
+    assert "comparison" not in result
+    assert "plain" not in result["definitions"]
+    assert len(result["graph"]["nodes"]) == len(result["graph"]["edges"]) == 9
+    forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize("scenario", SCENARIOS)
+def test_page_runner_builds_one_shared_registry_and_executes_six_nodes_once(monkeypatch, scenario):
+    original_make = branching.make_nodes
+    original_graph = branching.build_graph
+    original_runner = branching._run_langgraph
+    original_router = branching.route_after_evidence
+    calls, registries, built, run_graphs, decisions = [], [], [], [], []
+
+    def observed_make(fixture):
+        nodes = original_make(fixture)
+        observed = {}
+        for name, function in nodes.items():
+            @wraps(function)
+            def observed_node(state, _name=name, _function=function):
+                calls.append(_name)
+                return _function(state)
+            observed[name] = observed_node
+        registries.append(observed)
+        return observed
+
+    make_spy = Mock(side_effect=observed_make)
+    make_spy.__wrapped__ = original_make
+
+    @wraps(original_graph)
+    def observed_graph(fixture, *, nodes=None, router=None):
+        graph = original_graph(fixture, nodes=nodes, router=router)
+        built.append((graph, nodes))
+        return graph
+
+    @wraps(original_runner)
+    def observed_runner(fixture, graph, observed_decisions):
+        run_graphs.append(graph)
+        return original_runner(fixture, graph, observed_decisions)
+
+    @wraps(original_router)
+    def observed_router(state):
+        target = original_router(state)
+        decisions.append(target)
+        return target
+
+    monkeypatch.setattr(branching, "make_nodes", make_spy)
+    monkeypatch.setattr(branching, "build_graph", observed_graph)
+    monkeypatch.setattr(branching, "_run_langgraph", observed_runner)
+    monkeypatch.setattr(branching, "route_after_evidence", observed_router)
+    result = branching.run_replay(scenario)
+    assert make_spy.call_count == 1
+    assert len(built) == len(run_graphs) == len(registries) == 1
+    assert built[0][1] is registries[0]
+    assert built[0][0] is run_graphs[0]
+    assert calls == executed_nodes(scenario)
+    assert ("refuse" if scenario == "with_evidence" else "generate") not in calls
+    assert decisions == [selected_branch(scenario)]
+    assert_route(result["langgraph"], branching.load_fixture(scenario), scenario)
 
 
 def test_empty_path_propagates_empty_candidates_and_validates_a_fixed_refusal():
@@ -454,16 +531,24 @@ def test_definitions_expose_real_whitelisted_state_router_factory_and_graph_code
     definitions = branching.describe_definitions(fixture, nodes)
     expected = {
         "state": replay.ReplayState, "router": branching.route_after_evidence,
-        "factory": branching.make_nodes, "plain": branching._run_plain,
-        "graph_builder": branching.build_graph,
+        "base_factory": replay.make_nodes, "factory": branching.make_nodes,
+        "graph_builder": branching.build_graph, "runner": branching._run_langgraph,
+        "entry": branching.run_replay,
     }
+    assert set(definitions) == {*expected, "nodes"}
     for key, function in expected.items():
         assert_source_record(definitions[key], function)
     assert list(definitions["nodes"]) == NODE_IDS
     for name, function in nodes.items():
         assert_source_record(definitions["nodes"][name], function)
     assert "add_conditional_edges" in definitions["graph_builder"]["code"]
-    assert "if target == \"generate\"" in definitions["plain"]["code"]
+    assert "StateGraph(ReplayState)" in definitions["graph_builder"]["code"]
+    assert "builder.compile(" in definitions["graph_builder"]["code"]
+    assert "graph.stream(" in definitions["runner"]["code"]
+    assert "shared_nodes = make_nodes(fixture)" in definitions["entry"]["code"]
+    assert "_run_plain(" not in definitions["entry"]["code"]
+    assert "plain" not in definitions
+    assert definitions["base_factory"]["file"].endswith("/replay.py")
     assert definitions["state"]["file"].endswith("/replay.py")
     assert definitions["router"]["file"].endswith("/branching.py")
     definitions["nodes"]["generate"]["code"] = "outside mutation"
@@ -518,8 +603,9 @@ def test_langsmith_remains_disabled_even_when_enabled_in_user_environment(monkey
         fixture = branching.load_fixture(scenario)
         branching.run_plain(fixture)
         branching.run_langgraph(fixture)
+        assert branching.run_replay(scenario)["langgraph"]["engine"] == "langgraph"
         assert branching.compare_replay(scenario)["comparison"]["same_answer"] is True
-    assert len(observed) >= 6
+    assert len(observed) >= 8
     forbidden.assert_not_called()
 
 
@@ -536,16 +622,22 @@ def test_page_and_plan_work_without_real_index_and_reuse_security_headers(client
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS)
-def test_api_runs_each_fixed_scenario_without_real_rag_snapshot(client, scenario):
+def test_api_runs_each_fixed_scenario_without_real_rag_snapshot(client, monkeypatch, scenario):
+    forbidden = Mock(side_effect=AssertionError("Page API must not run an offline Python comparison"))
+    monkeypatch.setattr(branching, "compare_replay", forbidden)
+    monkeypatch.setattr(branching, "_run_plain", forbidden)
     response = client.post(API, headers=HEADERS, json={"scenario": scenario})
     assert response.status_code == 200
     result = response.json()
     assert result["schema_version"] == branching.SCHEMA
     assert result["scenario"]["id"] == scenario
     assert result["request_counts"] == ZERO_REQUESTS
-    assert all(result["comparison"].values())
-    assert_route(result["plain"], branching.load_fixture(scenario), scenario)
+    assert "comparison" not in result
+    assert "plain" not in result
+    assert "plain" not in result["definitions"]
     assert_route(result["langgraph"], branching.load_fixture(scenario), scenario)
+    assert_source_record(result["definitions"]["entry"], branching.run_replay)
+    forbidden.assert_not_called()
 
 
 @pytest.mark.parametrize("payload", [
@@ -556,11 +648,11 @@ def test_api_runs_each_fixed_scenario_without_real_rag_snapshot(client, scenario
     {"scenario": "with_evidence", "model": "glm"}, [], None, "text", 1,
 ])
 def test_api_strictly_requires_fixed_scenario_and_forbids_extra_fields(client, monkeypatch, payload):
-    compare = Mock(side_effect=AssertionError("Malformed request must not execute lesson"))
-    monkeypatch.setattr(branching, "compare_replay", compare)
+    runner = Mock(side_effect=AssertionError("Malformed request must not execute lesson"))
+    monkeypatch.setattr(branching, "run_replay", runner)
     response = client.post(API, headers={**HEADERS, "Content-Type": "application/json"}, content=json.dumps(payload))
     assert response.status_code == 422
-    compare.assert_not_called()
+    runner.assert_not_called()
 
 
 @pytest.mark.parametrize("headers,content,status", [
@@ -577,29 +669,30 @@ def test_api_reuses_origin_type_json_and_body_size_guards(client, headers, conte
 
 
 def test_api_failure_is_sanitized_has_no_retry_or_fallback_and_releases_lock(client, monkeypatch, capsys):
-    original = branching.compare_replay
+    original = branching.run_replay
     failed = Mock(side_effect=ValueError("PRIVATE_FIXTURE_MUST_NOT_LEAK"))
-    monkeypatch.setattr(branching, "compare_replay", failed)
+    monkeypatch.setattr(branching, "run_replay", failed)
     response = client.post(API, headers=HEADERS, json={"scenario": "empty_evidence"})
     assert response.status_code == 503
     assert "PRIVATE_FIXTURE_MUST_NOT_LEAK" not in response.text
     assert "PRIVATE_FIXTURE_MUST_NOT_LEAK" not in capsys.readouterr().out
     failed.assert_called_once_with("empty_evidence")
-    monkeypatch.setattr(branching, "compare_replay", original)
+    monkeypatch.setattr(branching, "run_replay", original)
     assert client.post(API, headers=HEADERS, json={"scenario": "with_evidence"}).status_code == 200
     assert client.post("/api/workflow/replay", headers=HEADERS, json={}).status_code == 200
 
 
 def test_branching_holds_the_shared_busy_lock_but_plans_remain_readable(client, monkeypatch):
     entered, release = Event(), Event()
-    original = branching.compare_replay
+    original = branching.run_replay
 
+    @wraps(original)
     def blocked(scenario):
         entered.set()
         assert release.wait(5)
         return original(scenario)
 
-    monkeypatch.setattr(branching, "compare_replay", blocked)
+    monkeypatch.setattr(branching, "run_replay", blocked)
     with ThreadPoolExecutor(max_workers=1) as pool:
         task = pool.submit(client.post, API, headers=HEADERS, json={"scenario": "with_evidence"})
         try:
@@ -631,7 +724,8 @@ def test_original_lesson_busy_lock_blocks_branching_without_executing_it(client,
 
     monkeypatch.setattr(replay, "compare_replay", blocked)
     branch_spy = Mock(side_effect=AssertionError("Busy conditional lesson must not execute"))
-    monkeypatch.setattr(branching, "compare_replay", branch_spy)
+    branch_spy.__wrapped__ = branching.run_replay
+    monkeypatch.setattr(branching, "run_replay", branch_spy)
     with ThreadPoolExecutor(max_workers=1) as pool:
         task = pool.submit(client.post, "/api/workflow/replay", headers=HEADERS, json={})
         try:
@@ -654,7 +748,8 @@ def test_real_retrieval_busy_lock_blocks_branching_without_executing_it(client, 
     monkeypatch.setattr(lab.hybrid, "prepare", Mock(return_value={"synthetic": True}))
     monkeypatch.setattr(lab.hybrid, "compare", blocked)
     branch_spy = Mock(side_effect=AssertionError("Busy lesson must not execute"))
-    monkeypatch.setattr(branching, "compare_replay", branch_spy)
+    branch_spy.__wrapped__ = branching.run_replay
+    monkeypatch.setattr(branching, "run_replay", branch_spy)
     with ThreadPoolExecutor(max_workers=1) as pool:
         task = pool.submit(client.post, "/api/compare", headers=HEADERS,
                            json={"query": "existing", "mode": "hybrid"})

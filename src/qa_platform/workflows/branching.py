@@ -12,7 +12,7 @@ from qa_platform.workflows import replay
 from qa_platform.workflows.replay import ReplayState
 
 
-SCHEMA = "rag-workflow-branching/v1"
+SCHEMA = "rag-workflow-branching/v2"
 SCENARIOS = [
     {"id": "with_evidence", "label": "有候选资料", "description": "保留教学召回，证据非空，进入草稿回放；不代表资料充分或可靠。"},
     {"id": "empty_evidence", "label": "召回为空", "description": "同一问题和资料，仅将两路召回置空，走固定拒答；不会自动补检索或调用模型。"},
@@ -25,7 +25,7 @@ NODES.insert(-1, {
 })
 NOTICE = (
     "仅教学合成数据：非空证据只决定能否进入草稿步骤，不是证据质量、相关性或可信度判定。"
-    "空召回场景只改两路召回列表，问题与资料不变。普通Python也能用if/else实现同样分支。"
+    "空召回场景只改两路召回列表，问题与资料不变。页面只运行和展示LangGraph，未选中的分支不执行。"
     "模型服务HTTP为0；不读.env、不连接Milvus、不外发LangSmith追踪；本机页面API通信另计。"
     "没有自动重试、补检索、持久化、多轮记忆或真实RAG接管；错误会停止，不伪装成正常拒答。"
 )
@@ -59,7 +59,7 @@ def refuse(state: ReplayState) -> dict:
 
 
 def make_nodes(fixture: dict) -> dict:
-    """复用上一课六个函数，另加固定拒答函数；两路仍共用函数对象。"""
+    """复用上一课六个函数，另加固定拒答函数，返回七个名称到函数的绑定。"""
     nodes = replay.make_nodes(fixture)
     nodes["refuse"] = refuse
     return {row["id"]: nodes[row["id"]] for row in NODES}
@@ -109,19 +109,25 @@ def build_graph(fixture: dict, *, nodes: dict | None = None, router=None):
     """条件边替代prepare_evidence的固定后继；两个分支只执行其一。"""
     from langgraph.graph import END, START, StateGraph
 
+    # 1. 创建图的构建器：先指定共享状态格式；这时没有运行任何节点。
     builder = StateGraph(ReplayState)
+    # 2. 注册函数对象：节点名称绑定到函数，不是在这里调用函数。
     for node_id, function in (nodes if nodes is not None else make_nodes(fixture)).items():
         builder.add_node(node_id, function, retry_policy=None)
+    # 3. 连固定边：START进入召回，再按PREFIX连接前四个节点。
     builder.add_edge(START, "retrieve")
     for source, target in zip(PREFIX, PREFIX[1:]):
         builder.add_edge(source, target)
+    # 4. 连条件边：证据准备结束后，路由只选择generate或refuse之一。
     builder.add_conditional_edges(
         "prepare_evidence", router if router is not None else route_after_evidence,
         {"generate": "generate", "refuse": "refuse"},
     )
+    # 5. 连接汇合与终点：两个备选分支都通往validate，再到END。
     builder.add_edge("generate", "validate")
     builder.add_edge("refuse", "validate")
     builder.add_edge("validate", END)
+    # 6. 编译成可运行的图；compile本身仍不执行节点，之后stream才执行。
     return builder.compile(checkpointer=None, cache=None)
 
 
@@ -177,8 +183,9 @@ def describe_definitions(fixture: dict | None = None, nodes: dict | None = None)
         raise ValueError("函数绑定与节点名称不一致")
     return {
         "state": _source_record(ReplayState), "router": _source_record(route_after_evidence),
-        "factory": _source_record(make_nodes), "plain": _source_record(_run_plain),
-        "graph_builder": _source_record(build_graph), "nodes": sources,
+        "base_factory": _source_record(replay.make_nodes), "factory": _source_record(make_nodes),
+        "graph_builder": _source_record(build_graph), "runner": _source_record(_run_langgraph),
+        "entry": _source_record(run_replay), "nodes": sources,
     }
 
 
@@ -201,7 +208,27 @@ def describe() -> dict:
             "dependency_message": f"沿用本项目验证的LangGraph {replay.VALIDATED_VERSION}；缺少依赖时不会伪装为图执行或自动安装。"}
 
 
+def run_replay(scenario: str = "with_evidence") -> dict:
+    """页面入口：准备固定输入，构图，执行，再返回真实图和状态轨迹。"""
+    fixture = load_fixture(scenario)
+    with tracing_context(enabled=False):
+        shared_nodes = make_nodes(fixture)
+        decisions = []
+        # _observe_router仅记录路由结果，不改变route_after_evidence的分支规则。
+        graph = build_graph(fixture, nodes=shared_nodes, router=_observe_router(decisions))
+        graphed = _run_langgraph(fixture, graph, decisions)
+        structure = graph.get_graph()
+        common = _common(fixture, shared_nodes)
+    return {
+        **common, "scenario": deepcopy(next(row for row in SCENARIOS if row["id"] == scenario)),
+        "graph": {"nodes": [{"id": key, "label": value.name} for key, value in structure.nodes.items()],
+                  "edges": [{"source": edge.source, "target": edge.target, "conditional": edge.conditional} for edge in structure.edges]},
+        "langgraph": graphed,
+    }
+
+
 def compare_replay(scenario: str = "with_evidence") -> dict:
+    """仅供离线回归对照；当前学习页不会调用此入口。"""
     fixture = load_fixture(scenario)
     with tracing_context(enabled=False):
         shared_nodes = make_nodes(fixture)
