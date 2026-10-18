@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>文档处理对照台</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root{color-scheme:light;--bg:#f4f6f8;--paper:#fff;--ink:#223447;--muted:#596b7d;--line:#d9e2e8;--teal:#116c65;--soft:#e7f3f0;--a:#587d99;--b:#348b80;--c:#8170a2;--orange:#80501a;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}button,input,select{font:inherit}button,select{cursor:pointer}button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #169f94;outline-offset:3px}button{border:1px solid var(--line);border-radius:7px;background:var(--paper);color:var(--ink);padding:8px 13px}button:hover{background:#eef3f5}button:disabled,select:disabled{cursor:default;opacity:.5}a{color:var(--teal)}[hidden]{display:none!important}h1,h2,h3,p{margin:0}h1{font-size:25px;letter-spacing:.02em}h2{font-size:18px}h3{font-size:16px}small,.muted{color:var(--muted)}.mono{font-family:var(--mono)}.shell{max-width:1480px;margin:auto;padding:28px 32px 40px}.top{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:24px}.eyebrow{color:var(--teal);font-size:12px;letter-spacing:.12em;margin-bottom:4px}.subtitle{color:var(--muted);margin-top:5px}.badges{display:flex;gap:7px;flex-wrap:wrap}.badge{display:inline-block;font-size:12px;padding:3px 8px;border-radius:5px;background:var(--soft);color:#195e56}.badge.warning{background:#fff0db;color:var(--orange)}.toolbar{display:flex;align-items:end;gap:16px;flex-wrap:wrap;background:var(--paper);padding:16px 20px;border:1px solid var(--line);border-radius:10px}.field{display:flex;flex-direction:column;gap:5px}.field label{font-size:12px;color:var(--muted)}.field.grow{flex:1;min-width:200px}select,input{padding:8px 10px;border:1px solid #bccbd5;border-radius:6px;background:#fff;color:var(--ink);max-width:100%}.toolbar select{min-width:115px}.toolbar .grow select{width:100%}.primary{background:var(--teal);color:white;border-color:var(--teal)}.primary:hover{background:#085b55}#load-status{font-size:13px;min-height:24px;margin:10px 2px;color:var(--muted)}.notice{background:#fff4e4;border-left:3px solid #c58b39;border-radius:4px;padding:12px 16px;margin:12px 0;overflow-wrap:anywhere}.notice ul{margin:4px 0 0;padding-left:22px;font-size:13px}.error{background:#fff0ef;color:#8b332b;border-left-color:#b64d43}.doc-head{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:18px 2px 14px}.path{font-size:12px;overflow-wrap:anywhere;color:var(--muted)}.source-link{font-size:13px}.tabs{display:flex;gap:18px;border-bottom:1px solid var(--line);margin-bottom:20px}.tab{border:0;border-radius:0;background:none;padding:12px 3px;color:var(--muted);border-bottom:3px solid transparent}.tab[aria-selected=true]{border-bottom-color:var(--teal);color:var(--teal);font-weight:600}.tab:hover{background:transparent}.section-bar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin:12px 0}.section-bar small{font-size:12px}.check{display:flex;align-items:center;gap:7px;font-size:13px}.check input{accent-color:var(--teal);width:16px;height:16px}.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:8px 0}.legend span{display:flex;align-items:center;gap:5px}.dot{width:9px;height:9px;border-radius:2px;display:inline-block;background:#e9edf0}.dot.red{background:#e8b6b0}.dot.green{background:#a9d3bd}.compare{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}.compare-head{display:grid;grid-template-columns:1fr 1fr;background:#edf2f5;border-bottom:1px solid var(--line);font-size:13px;font-weight:600}.compare-head>div{padding:10px 14px}.compare-head>div+div{border-left:1px solid var(--line)}#compare-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);max-height:460px;overflow:auto;align-items:stretch}.source-cell{display:grid;grid-template-columns:39px minmax(0,1fr);border-right:1px solid #e4eaf0;min-height:23px;font:12px/1.75 var(--mono)}.line-no{padding:1px 7px;text-align:right;color:#738292;background:#f7f9fa;user-select:none}.source-line{white-space:pre-wrap;overflow-wrap:anywhere;padding:1px 10px;tab-size:4;min-width:0}.source-cell.removed{background:#fff0ed}.source-cell.added{background:#eaf7ee}.source-cell.removed .line-no{background:#f9e1dd;color:#8c443d}.source-cell.added .line-no{background:#dceddf;color:#376e4b}.source-cell.empty{background:#f4f6f8}.full-column{min-width:0}.note{font-size:12px;color:var(--muted);margin:10px 0}.action-list{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}.action-list details{margin:8px 0}.action-list summary{cursor:pointer;font-size:13px}pre{margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.8 var(--mono);tab-size:4}details pre{background:#edf2f5;padding:10px 13px;border-radius:5px;max-height:280px;overflow:auto}.actions-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.stats-wrap{overflow:auto;border:1px solid var(--line);border-radius:8px;background:white;margin:12px 0 20px}table{border-collapse:collapse;width:100%;font-size:13px;white-space:nowrap}th,td{padding:9px 14px;text-align:right;border-bottom:1px solid #e9eef2}th{font-weight:500;color:var(--muted);background:#f6f8fa}th:first-child,td:first-child{text-align:left}tbody tr:last-child td{border:0}.route-letter{display:inline-block;font-weight:600;margin-right:8px}.route-letter.a{color:var(--a)}.route-letter.b{color:var(--b)}.route-letter.c{color:var(--c)}.lanes{margin-top:15px}.lane{display:grid;grid-template-columns:140px minmax(0,1fr);gap:16px;align-items:center;margin:15px 0}.lane-label{font-size:13px}.track{position:relative;height:35px;background:#e7edf1;border-radius:4px;min-width:0}.segment{position:absolute;top:0;height:100%;padding:0;border:0;border-right:1px solid #fff9;border-radius:0;min-width:0;background:var(--a)}.segment.a{background:var(--a)}.segment.b{background:var(--b)}.segment.c{background:var(--c)}.segment.alt{filter:brightness(1.13)}.segment:hover{filter:brightness(.85)}.segment[aria-pressed=true]{box-shadow:inset 0 0 0 2px #263b46;z-index:1}.segment.omitted{background:repeating-linear-gradient(130deg,#efdbb8 0 3px,#fff4df 3px 6px)}.position-marker{position:absolute;top:-5px;bottom:-5px;width:2px;background:#152c3a;pointer-events:none;z-index:2}.axis{display:flex;justify-content:space-between;margin-left:156px;font-size:11px;color:var(--muted)}.position-controls{display:flex;align-items:end;gap:15px;flex-wrap:wrap;background:#fff;border:1px solid var(--line);padding:13px 16px;border-radius:8px;margin:20px 0 10px}.position-controls input{width:110px}.position-controls select{max-width:330px}.detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:18px}.detail-card{border:1px solid var(--line);background:white;border-radius:8px;overflow:hidden;min-width:0}.detail-title{padding:12px 14px;border-bottom:1px solid var(--line);background:#f7f9fa}.detail-body{padding:12px 14px}.detail-meta{font-size:12px;color:var(--muted);overflow-wrap:anywhere}.detail-code{max-height:370px;overflow:auto;background:#f7f9fa;padding:12px;border-radius:5px;border:1px solid #edf1f4}.detail-code mark{background:#ffe39c;color:#172b37;border-radius:2px}.detail-card .badges{margin:9px 0}.ledger-message{background:#fff4e4;padding:10px;border-radius:5px;font-size:13px;margin:9px 0}.detail-card details{font-size:12px;margin-top:10px}.foot{border-top:1px solid var(--line);padding-top:14px;margin-top:24px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:15px;flex-wrap:wrap}
+    @media(max-width:900px){.shell{padding:20px 18px}.detail-grid{grid-template-columns:1fr}.detail-code{max-height:280px}.top{align-items:start}.lane{grid-template-columns:112px minmax(0,1fr);gap:10px}.axis{margin-left:122px}.actions-grid{grid-template-columns:1fr}}
+    @media(max-width:520px){.shell{padding:16px 12px}.top{flex-direction:column;gap:10px}h1{font-size:22px}.toolbar{padding:13px;gap:10px}.field.grow{flex-basis:100%}.toolbar .field:not(.grow){flex:1}.toolbar button{min-height:42px}.compare-head{font-size:12px}.compare-head>div{padding:9px 7px}.source-cell{grid-template-columns:25px minmax(0,1fr);font-size:11px}.source-line{padding:1px 5px}.line-no{padding:1px 3px}.lane{grid-template-columns:85px minmax(0,1fr);gap:8px}.lane-label{font-size:12px}.axis{margin-left:93px}.position-controls{gap:12px}.position-controls .field{width:100%}.position-controls input,.position-controls select{width:100%;max-width:none}.stats-wrap th,.stats-wrap td{padding:8px 10px}.source-link{font-size:12px}}
+  </style>
+</head>
+<body>
+<main class="shell">
+  <header class="top">
+    <div><div class="eyebrow">KUBERNETES · DATA LAB</div><h1>文档处理对照台</h1><p class="subtitle">把清洗与切块的过程，放到同一份原文上观察。</p></div>
+    <div class="badges"><span class="badge">本地只读</span><span class="badge">模型请求 0 次</span></div>
+  </header>
+  <div class="toolbar">
+    <div class="field grow"><label for="document-select">样例文档</label><select id="document-select" disabled><option>加载样例列表…</option></select></div>
+    <div class="field"><label for="budget-select">每块字符目标 · 非 Token</label><select id="budget-select"><option value="200">200 字符 · 观察差异</option><option value="800">800 字符 · 批量配置</option></select></div>
+    <button class="primary" id="refresh" type="button" disabled>重新计算</button>
+  </div>
+  <p id="load-status" role="status" aria-live="polite">正在连接本地处理服务…</p>
+  <div id="error" class="notice error" role="alert" hidden></div>
+  <section id="results" hidden>
+    <div class="doc-head"><div><h2 id="doc-title"></h2><p id="doc-path" class="path mono"></p></div><a id="source-link" class="source-link" target="_blank" rel="noreferrer noopener">查看固定快照原文 ↗</a></div>
+    <div id="warnings" class="notice" role="status" hidden></div>
+    <nav class="tabs" role="tablist" aria-label="观察方式">
+      <button id="tab-clean" class="tab" role="tab" aria-selected="true" aria-controls="panel-clean" type="button">清洗前后</button>
+      <button id="tab-chunk" class="tab" role="tab" aria-selected="false" aria-controls="panel-chunk" type="button">切块对照</button>
+    </nav>
+    <section id="panel-clean" role="tabpanel" aria-labelledby="tab-clean">
+      <div class="section-bar"><p id="clean-summary"></p><label class="check"><input id="diff-mode" type="checkbox" checked>行级差异对齐</label></div>
+      <div class="legend"><span><i class="dot red"></i>原文移除／替换</span><span><i class="dot green"></i>清洗新增／替换</span><span>代码和模板只显示为文本，不执行</span></div>
+      <div class="compare"><div class="compare-head"><div>原始 Markdown</div><div>清洗后正文</div></div><div id="compare-body"></div></div>
+      <p class="note">两侧行号分别属于各自文本。红色不一定表示知识丢失：开头的 front matter 会转为元数据，可在下方展开查看。差异配对不是原始行号的精确来源映射；行尾换行差异未单独标记。</p>
+      <div id="clean-counts" class="note"></div>
+      <div id="actions" class="action-list"></div>
+    </section>
+    <section id="panel-chunk" role="tabpanel" aria-labelledby="tab-chunk" hidden>
+      <div id="chunk-error" class="notice error" role="alert" hidden></div>
+      <div id="chunk-content">
+        <h2>同一正文，三种边界</h2><p class="note">共用清洗正文和字符目标，重叠均为 0。点色带按同一正文位置对齐，不按块序号对齐。</p>
+        <div class="stats-wrap"><table><thead><tr><th>路线</th><th>候选块</th><th>被切开的代码段</th><th>超字符目标块</th><th>候选正文字符</th></tr></thead><tbody id="stats-body"></tbody></table></div>
+        <div id="lanes" class="lanes"></div><div class="axis"><span>0</span><span id="axis-end"></span></div>
+        <div class="legend"><span>每一格代表一块，长度对应原文字符范围</span><span><i class="dot" style="background:#efdbb8"></i>斜纹：C 路线退出候选的区间</span></div>
+        <div class="position-controls">
+          <div class="field"><label for="position">共同正文位置（从 0 开始）</label><input id="position" type="number" min="0" step="1" value="0"></div>
+          <div class="field"><label for="code-select">定位代码示例</label><select id="code-select"></select></div>
+          <div class="field"><label for="ledger-select">查看 C 路线清理位置</label><select id="ledger-select"></select></div>
+        </div>
+        <p id="position-note" class="note" role="status" aria-live="polite"></p>
+        <div id="details" class="detail-grid"></div>
+        <p class="note">区间使用清洗正文的 Python 字符半开区间 [start, end)，不是原文行号。字符数不等于 Token 数；这些只是结构统计，不是检索准确率。</p>
+      </div>
+    </section>
+    <footer class="foot"><span id="rule-info"></span><span>只做观察：不改上游、JSONL 或 Milvus，不读取模型密钥，不进行向量化。</span></footer>
+  </section>
+</main>
+<script>
+"use strict";
+// 页面只展示后端计算结果；所有文档内容用textContent，不插入HTML。
+const byId = id => document.getElementById(id);
+const state = {data:null,position:0,sequence:0,controller:null};
+const reasons = {whitespace:"纯空白退出候选",heading_to_context:"标题转为元数据上下文"};
+const labels = {comments_removed:"删除 HTML 注释",fenced_blocks_preserved:"保护代码围栏",include:"展开共享片段",code_sample:"展开代码示例",codenew:"展开代码示例",heading:"转换标题",param:"展开参数",glossary_tooltip:"保留术语文字","feature-state":"转换功能状态","version-check":"保留版本前提"};
+function node(tag,className,text){const n=document.createElement(tag);if(className)n.className=className;if(text!==undefined)n.textContent=String(text);return n;}
+function cell(text){return node("td","",text);}
+function showError(message){byId("error").textContent=message;byId("error").hidden=false;}
+function setTab(which){for(const name of ["clean","chunk"]){byId("tab-"+name).setAttribute("aria-selected",String(which===name));byId("panel-"+name).hidden=which!==name;}}
+for(const name of ["clean","chunk"]){byId("tab-"+name).addEventListener("click",()=>setTab(name));byId("tab-"+name).addEventListener("keydown",event=>{if(["ArrowLeft","ArrowRight"].includes(event.key)){event.preventDefault();const next=name==="clean"?"chunk":"clean";setTab(next);byId("tab-"+next).focus();}});}
+function sourceCell(line,text,kind){const row=node("div","source-cell "+kind);row.append(node("span","line-no",line===null?"":line),node("span","source-line",text===null?" ":text||" "));return row;}
+function renderCleaning(){
+  const data=state.data.cleaning,body=byId("compare-body");body.replaceChildren();
+  if(byId("diff-mode").checked){
+    const fragment=document.createDocumentFragment();
+    for(const row of data.diff_rows){
+      fragment.append(sourceCell(row.raw_line,row.raw_text,row.raw_line===null?"empty":row.tag==="equal"?"":"removed"));
+      fragment.append(sourceCell(row.cleaned_line,row.cleaned_text,row.cleaned_line===null?"empty":row.tag==="equal"?"":"added"));
+    }
+    body.append(fragment);
+  }else{
+    for(const text of [data.raw,data.cleaned]){const column=node("div","full-column");text.split(/\r?\n/).forEach((line,index)=>column.append(sourceCell(index+1,line,"")));body.append(column);}
+  }
+  byId("clean-summary").textContent=`原文 ${data.raw_chars.toLocaleString()} → 清洗正文 ${data.cleaned_chars.toLocaleString()} 字符`;
+  byId("clean-counts").textContent=Object.entries(data.counts).map(([name,count])=>`${labels[name]||name}：${count}`).join(" · ");
+  const actions=byId("actions");actions.replaceChildren(node("h3","","处理动作示例"));
+  actions.append(node("p","note","每类展示首次转换的代表样例；不是全部转换位置的完整清单。"));
+  for(const action of data.actions){const detail=node("details"),summary=node("summary","",labels[action.name]||action.name),grid=node("div","actions-grid");for(const [title,text] of [["转换前",action.before],["转换后",action.after]]){const part=node("div");part.append(node("p","note",title),node("pre","",text));grid.append(part);}detail.append(summary,grid);actions.append(detail);}
+  const metadata=node("details");metadata.append(node("summary","","文档元数据：原始标题、版本前提与许可"),node("pre","",JSON.stringify({front_matter:state.data.document.metadata.front_matter,license:state.data.document.metadata.license,kubernetes_release:state.data.document.metadata.kubernetes_release},null,2)));actions.append(metadata);
+}
+function initialPosition(data){
+  const codes=data.chunking.codes;if(!codes.length)return 0;
+  const first=codes[0],boundary=data.chunking.routes.A.chunks.find(chunk=>chunk.end>first.start&&chunk.end<first.end);
+  return boundary?boundary.end:first.start;
+}
+function renderChunking(){
+  const chunking=state.data.chunking;byId("chunk-error").hidden=chunking.available;byId("chunk-content").hidden=!chunking.available;
+  if(!chunking.available){byId("chunk-error").textContent="无法可靠切块："+chunking.error;return;}
+  const routes=chunking.routes,total=state.data.cleaning.cleaned_chars,stats=byId("stats-body"),lanes=byId("lanes");stats.replaceChildren();lanes.replaceChildren();
+  for(const key of ["A","B","C"]){
+    const route=routes[key],row=node("tr"),name=cell("");name.append(node("span","route-letter "+key.toLowerCase(),key),document.createTextNode(route.label));row.append(name,...[route.stats.chunks,route.stats.cut_code,route.stats.over,route.stats.chars].map(value=>cell(value.toLocaleString())));stats.append(row);
+    const lane=node("div","lane"),label=node("div","lane-label",`${key} · ${route.label}`),track=node("div","track");track.dataset.route=key;
+    const entries=[...route.chunks.map(item=>({...item,candidate:true})),...route.omitted.map(item=>({...item,candidate:false}))].sort((a,b)=>a.start-b.start);
+    entries.forEach((item,index)=>{
+      const button=node("button","segment "+key.toLowerCase()+(index%2?" alt":"")+(!item.candidate?" omitted":""));button.type="button";button.style.left=(item.start/total*100)+"%";button.style.width=((item.end-item.start)/total*100)+"%";button.dataset.start=item.start;button.dataset.end=item.end;button.setAttribute("aria-label",`${key} ${item.candidate?"第"+(item.index+1)+"块":reasons[item.reason]} [${item.start},${item.end})`);button.title=button.getAttribute("aria-label");button.addEventListener("click",event=>{let position=item.start;if(event.detail!==0){const box=track.getBoundingClientRect();position=Math.floor((event.clientX-box.left)/box.width*total);position=Math.max(item.start,Math.min(item.end-1,position));}setPosition(position);});track.append(button);
+    });
+    const marker=node("div","position-marker");marker.setAttribute("aria-hidden","true");track.append(marker);lane.append(label,track);lanes.append(lane);
+  }
+  byId("axis-end").textContent=total.toLocaleString()+" 字符";byId("position").max=Math.max(0,total-1);
+  const codeSelect=byId("code-select");codeSelect.replaceChildren(new Option("选择代码示例…",""));chunking.codes.forEach((code,index)=>codeSelect.add(new Option(`代码 ${index+1} · [${code.start},${code.end}) · ${code.end-code.start} 字符`,String(index))));codeSelect.disabled=!chunking.codes.length;
+  const ledger=byId("ledger-select");ledger.replaceChildren(new Option(routes.C.omitted.length?"选择清理位置…":"本预算没有独立排除区间",""));routes.C.omitted.forEach((item,index)=>ledger.add(new Option(`${reasons[item.reason]} · [${item.start},${item.end})`,String(index))));ledger.disabled=!routes.C.omitted.length;
+  setPosition(state.position);
+}
+function renderSelectedCode(item,position){
+  const pre=node("pre","detail-code"),code=node("code"),chars=Array.from(item.text),relative=position-item.start;
+  // JavaScript原生字符串偏移是UTF-16；Array.from改为与Python一致的字符口径。
+  code.append(document.createTextNode(chars.slice(0,relative).join("")));const mark=node("mark","",chars[relative]||"");code.append(mark,document.createTextNode(chars.slice(relative+1).join("")));pre.append(code);return pre;
+}
+function renderDetail(key,position){
+  const route=state.data.chunking.routes[key],item=route.chunks.find(chunk=>chunk.start<=position&&position<chunk.end),omitted=route.omitted.find(part=>part.start<=position&&position<part.end),card=node("article","detail-card"),title=node("div","detail-title");title.append(node("h3","",key+" · "+route.label));card.append(title);const body=node("div","detail-body");card.append(body);
+  if(!item){
+    if(omitted){body.append(node("p","detail-meta",`[${omitted.start}, ${omitted.end}) · ${omitted.end-omitted.start} 字符`));body.append(node("div","ledger-message",reasons[omitted.reason]+"。原文仍在父文档和处置账本中，不是删除原始资料。"));if(omitted.reason==="heading_to_context"){const targets=route.chunks.filter(chunk=>chunk.heading_context_ranges.some(range=>range.start===omitted.start&&range.end===omitted.end));body.append(node("p","note","标题上下文关联到 C 路线第 "+targets.map(chunk=>chunk.index+1).join("、")+" 块；正文长度未扩大。"));}body.append(renderSelectedCode(omitted,position));}else{body.append(node("p","ledger-message","此位置没有可展示的候选，请检查账本。"));}return card;
+  }
+  body.append(node("p","detail-meta",`第 ${item.index+1} / ${route.chunks.length} 块 · [${item.start}, ${item.end}) · ${item.chars} 字符`));body.append(node("p","detail-meta",item.sections.map(section=>section.join(" / ")).join(" ｜ ")||"无章节标题"));
+  const badges=node("div","badges");if(item.cut_code)badges.append(node("span","badge warning","该块切到代码"));if(item.over_budget)badges.append(node("span","badge warning","完整代码超字符目标"));if(item.needs_heading_review)badges.append(node("span","badge warning","标题待核对"));if((route.merges||[]).some(merge=>merge.to_start===item.start&&merge.to_end===item.end))badges.append(node("span","badge","标题与同章节正文合并"));body.append(badges,renderSelectedCode(item,position));
+  if(item.heading_context_ranges.length){const detail=node("details");detail.append(node("summary","","元数据中的标题上下文"));for(const range of item.heading_context_ranges)detail.append(node("pre","",`[${range.start},${range.end})\n${range.text}`));body.append(detail);}
+  body.append(node("p","detail-meta mono","chunk_id="+item.id));return card;
+}
+function setPosition(value){
+  if(!state.data||!state.data.chunking.available)return;
+  const total=state.data.cleaning.cleaned_chars;state.position=Math.max(0,Math.min(Math.max(0,total-1),Math.floor(Number(value)||0)));byId("position").value=state.position;
+  for(const marker of document.querySelectorAll(".position-marker"))marker.style.left=(state.position/Math.max(1,total)*100)+"%";
+  for(const button of document.querySelectorAll(".segment"))button.setAttribute("aria-pressed",String(Number(button.dataset.start)<=state.position&&state.position<Number(button.dataset.end)));
+  const c=Array.from(state.data.cleaning.cleaned)[state.position];const charLabel=c==="\n"?"换行":c===" "?"空格":c==="\t"?"Tab":c||"空文本";byId("position-note").textContent=`共同位置 ${state.position} / ${total} · 当前字符：${charLabel} · 下方三列来自同一正文位置`;
+  byId("details").replaceChildren(...["A","B","C"].map(key=>renderDetail(key,state.position)));
+  const codeIndex=state.data.chunking.codes.findIndex(code=>code.start<=state.position&&state.position<code.end);byId("code-select").value=codeIndex<0?"":String(codeIndex);
+  const ledgerIndex=state.data.chunking.routes.C.omitted.findIndex(part=>part.start<=state.position&&state.position<part.end);byId("ledger-select").value=ledgerIndex<0?"":String(ledgerIndex);
+}
+async function loadPreview(){
+  const sequence=++state.sequence;if(state.controller)state.controller.abort();state.controller=new AbortController();byId("error").hidden=true;byId("results").hidden=true;byId("load-status").textContent="正在本地清洗与切块… 不会调用模型。";
+  const previous=state.data,documentId=byId("document-select").value;
+  try{
+    const response=await fetch("/api/preview?"+new URLSearchParams({document:documentId,chunk_size:byId("budget-select").value}),{signal:state.controller.signal});const data=await response.json();if(!response.ok)throw new Error(typeof data.detail==="string"?data.detail:"请求参数不合法");if(sequence!==state.sequence)return;state.data=data;
+    state.position=previous&&previous.document.id===documentId?Math.min(state.position,data.cleaning.cleaned_chars-1):data.chunking.available?initialPosition(data):0;
+    byId("doc-title").textContent=data.document.metadata.title;byId("doc-path").textContent=data.document.path;
+    const link=byId("source-link"),url=data.document.metadata.source_url;link.hidden=!url.startsWith("https://github.com/kubernetes/website/blob/");if(!link.hidden)link.href=url;
+    const warnings=byId("warnings");warnings.replaceChildren();warnings.hidden=!data.cleaning.warnings.length;if(data.cleaning.warnings.length){warnings.append(node("strong","","仅供观察：本篇仍有待处理语法，不能视为清洗合格或可入库。"));const list=node("ul");for(const warning of data.cleaning.warnings)list.append(node("li","",warning));warnings.append(list);}
+    renderCleaning();renderChunking();byId("rule-info").textContent=`清洗规则 ${data.document.metadata.cleaner_version} · 快照 ${data.document.metadata.snapshot_commit.slice(0,12)}`;byId("results").hidden=false;byId("load-status").textContent=`已完成本地计算 · ${data.budget.target_chars} 字符目标 · 共享同一份清洗正文 · 尚未核查 Token 上限与检索质量`;
+  }catch(error){if(error.name==="AbortError"||sequence!==state.sequence)return;showError("无法加载："+error.message+"。请确认本地服务仍在运行，然后重新计算。");byId("load-status").textContent="本次未展示旧结果，避免把旧参数的数据误认为新结果。";}
+}
+byId("diff-mode").addEventListener("change",()=>{if(state.data)renderCleaning();});byId("position").addEventListener("change",event=>setPosition(event.target.value));byId("code-select").addEventListener("change",event=>{if(event.target.value==="")return;const code=state.data.chunking.codes[Number(event.target.value)],boundary=state.data.chunking.routes.A.chunks.find(chunk=>chunk.end>code.start&&chunk.end<code.end);setPosition(boundary?boundary.end:code.start);});byId("ledger-select").addEventListener("change",event=>{if(event.target.value!=="")setPosition(state.data.chunking.routes.C.omitted[Number(event.target.value)].start);});byId("refresh").addEventListener("click",loadPreview);byId("document-select").addEventListener("change",loadPreview);byId("budget-select").addEventListener("change",()=>{if(!byId("document-select").disabled)loadPreview();});
+async function init(){try{const response=await fetch("/api/documents");if(!response.ok)throw new Error("样例列表请求失败");const data=await response.json(),select=byId("document-select");select.replaceChildren();for(const sample of data.documents)select.add(new Option(sample.title,sample.id));select.value=data.default_id;select.disabled=false;byId("refresh").disabled=false;await loadPreview();}catch(error){showError("连接失败："+error.message+"。请通过本地服务地址打开页面，不要直接双击 HTML 文件。");byId("load-status").textContent="本地服务尚未连接。";}}
+init();
+</script>
+</body>
+</html>

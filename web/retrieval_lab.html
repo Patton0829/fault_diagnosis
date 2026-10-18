@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="在当前选定的11篇 Kubernetes 文档子集上，直观比较 BM25、Dense 与 RRF 的文本块排序；检索范围不是全量 Kubernetes 文档。">
+  <title>Kubernetes 检索对照台</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root{color-scheme:light;--bg:#f4f6f8;--paper:#fff;--ink:#223447;--muted:#596b7d;--line:#d9e2e8;--teal:#116c65;--soft:#e7f3f0;--bm25:#587d99;--dense:#348b80;--rrf:#8170a2;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}button,input{font:inherit}button,a,summary{touch-action:manipulation}button{cursor:pointer}button:disabled,input:disabled{cursor:default;opacity:.55}button:focus-visible,input:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #169f94;outline-offset:3px}[hidden]{display:none!important}h1,h2,h3,p{margin:0}a{color:var(--teal)}.shell{max-width:1480px;margin:auto;padding:30px 32px 36px}.top{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:23px}.eyebrow{font-size:11px;color:var(--teal);letter-spacing:.14em;margin-bottom:4px}h1{font-size:26px;font-weight:650;letter-spacing:.015em}.subtitle{color:var(--muted);font-size:14px;margin-top:5px}.badges{display:flex;gap:7px;flex-wrap:wrap}.badge{font-size:12px;background:var(--soft);color:#195e56;border-radius:5px;padding:3px 9px;white-space:nowrap}.badge.neutral{background:#e9eef2;color:var(--muted)}.controls{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:20px 22px 17px}.field-label{display:block;font-size:13px;font-weight:600;margin-bottom:7px}.query-row{display:flex;gap:10px;align-items:stretch}#query{flex:1;min-width:0;border:1px solid #bdcbd5;border-radius:7px;padding:12px 13px;color:var(--ink);background:white;font-size:15px;width:100%;appearance:none}#query:focus{border-color:var(--teal)}.actions{display:flex;gap:10px}.action{border:1px solid #b8cbd1;border-radius:7px;background:white;color:var(--ink);padding:9px 17px;white-space:nowrap;text-align:left;line-height:1.4;min-width:155px}.action span{display:block;font-weight:600;font-size:14px}.action small{display:block;font-size:11px;color:var(--muted);margin-top:3px}.action:hover:not(:disabled){background:#eef5f6}.action.primary{background:var(--teal);color:white;border-color:var(--teal)}.action.primary small{color:#d4efea}.action.primary:hover:not(:disabled){background:#085b55}.plan-line{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:11px}.status-row{display:flex;align-items:start;gap:8px;margin:12px 2px 0;min-height:24px;font-size:13px;color:var(--muted)}.status-dot{width:7px;height:7px;background:#91a6b4;border-radius:50%;flex:none;margin-top:7px}.busy .status-dot{background:var(--teal);animation:pulse 1.2s infinite}.error{padding:11px 15px;border:1px solid #e7c5c1;border-radius:7px;background:#fff0ef;color:#8b332b;font-size:13px;margin-top:10px}.workspace{margin-top:24px}.section-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px}h2{font-size:17px;font-weight:650}.result-summary{font-size:12px;color:var(--muted)}.columns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.route{background:var(--paper);border:1px solid var(--line);border-radius:9px;min-width:0;overflow:hidden;--route:var(--bm25)}.route.dense{--route:var(--dense)}.route.rrf{--route:var(--rrf)}.route-head{padding:15px 17px 13px;border-bottom:1px solid var(--line);border-top:3px solid var(--route)}.route-name{display:flex;align-items:center;justify-content:space-between;gap:10px}.route h3{font-size:17px;font-weight:650;color:var(--route)}.route-count{font-size:11px;color:var(--muted);background:#f0f4f6;padding:2px 7px;border-radius:4px}.route-head p{font-size:12px;color:var(--muted);margin-top:3px}.hit-list{list-style:none;padding:11px;margin:0;display:grid;gap:10px;align-content:start}.hit{border:1px solid #e2e8ed;border-radius:7px;overflow:hidden;transition:border-color .12s,box-shadow .12s}.hit.selected{border-color:var(--route);box-shadow:0 0 0 1px var(--route)}.card-select{display:block;width:100%;padding:12px 12px 11px;border:0;border-radius:6px;background:white;text-align:left;color:var(--ink)}.card-select:hover{background:#f6f9fa}.hit.selected .card-select{background:#f0f7f6}.card-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px}.rank{display:inline-flex;width:24px;height:24px;justify-content:center;align-items:center;border-radius:5px;background:#eef2f5;color:var(--route);font-weight:700;font-size:12px}.score{font:11px/1.5 var(--mono);color:var(--muted)}.card-title{display:block;font-size:14px;font-weight:600;line-height:1.55}.chunk-id{display:block;font:10px/1.5 var(--mono);color:var(--muted);margin-top:4px;overflow-wrap:anywhere}.snippet{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;font-size:12px;color:var(--muted);line-height:1.65;margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere}.card-foot{border-top:1px solid #eef2f5;background:#fafcfd;padding:8px 12px;font-size:11px;color:var(--muted)}.terms{display:flex;gap:5px;flex-wrap:wrap}.term{display:inline-block;background:#eaf0f5;color:#48687e;padding:1px 6px;border-radius:4px}.contribution{display:block;font:10px/1.9 var(--mono);overflow-wrap:anywhere}.empty{padding:24px 17px 28px;min-height:165px;color:var(--muted);font-size:13px}.empty strong{display:block;color:var(--ink);font-size:14px;font-weight:550;margin-bottom:6px}.empty-step{font:11px var(--mono);letter-spacing:.08em;color:var(--route);margin-bottom:11px}.explain{display:flex;gap:8px;align-items:baseline;font-size:12px;color:var(--muted);margin:12px 2px 0}.explain .marker{color:var(--teal);font-size:14px}.detail{margin-top:20px;border:1px solid var(--line);border-radius:9px;background:white;overflow:hidden}.detail-head{padding:15px 19px;border-bottom:1px solid var(--line);background:#fafcfd}.detail-overline{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px}.detail-label{font-size:11px;color:var(--teal);letter-spacing:.06em}.detail h2{font-size:17px}.rank-strip{display:flex;gap:6px;flex-wrap:wrap}.rank-chip{font-size:11px;border:1px solid var(--line);border-radius:4px;padding:2px 7px;color:var(--muted)}.rank-chip.bm25{color:var(--bm25)}.rank-chip.dense{color:var(--dense)}.rank-chip.rrf{color:var(--rrf)}.detail-body{padding:15px 19px 18px}.metadata{display:grid;grid-template-columns:60px minmax(0,1fr);gap:5px 10px;font-size:12px;line-height:1.8;margin:0 0 13px;overflow-wrap:anywhere}.metadata dt{color:var(--muted)}.metadata dd{margin:0;min-width:0}.mono{font-family:var(--mono)}.text-label{font-size:12px;color:var(--muted);margin:0 0 6px}.passage{margin:0;background:#f6f8fa;border:1px solid #e7edf1;border-radius:6px;padding:14px 15px;font:13px/1.8 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;tab-size:4;max-height:360px;overflow:auto}.full-text{font-size:12px;margin-top:10px}.full-text summary{color:var(--teal);cursor:pointer;width:fit-content}.full-text .passage{margin-top:9px;max-height:520px}.boundary{font-size:12px;color:var(--muted);margin:18px 2px 0;border-top:1px solid var(--line);padding-top:14px}.boundary strong{font-weight:600;color:var(--ink)}.footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:15px}.notice{color:var(--muted);font-size:12px;margin-top:8px;overflow-wrap:anywhere}@keyframes pulse{50%{opacity:.35}}@media(prefers-reduced-motion:reduce){.busy .status-dot{animation:none}.hit{transition:none}}@media(max-width:1120px){.query-row{flex-wrap:wrap}#query{flex-basis:100%}.actions{width:100%}.action{flex:1}.columns{gap:11px}.shell{padding:24px 22px 30px}}@media(max-width:760px){.shell{padding:20px 15px 28px}.top{align-items:start}.top>.badges{justify-content:flex-end}.subtitle{max-width:29em}h1{font-size:23px}.controls{padding:16px}.columns{grid-template-columns:1fr;gap:16px}.hit-list{grid-template-columns:repeat(2,minmax(0,1fr))}.route-head{padding:12px 15px}.empty{min-height:0;padding:18px 16px}.empty-step{margin-bottom:5px}.section-head{gap:3px}.explain{font-size:11px}}@media(max-width:470px){.top{gap:10px}.top>.badges{max-width:90px}.badge{font-size:10px;padding:3px 6px}.subtitle{font-size:12px}.actions{gap:8px}.action{min-width:0;padding:10px}.action span{font-size:12px}.action small{font-size:10px}.hit-list{grid-template-columns:1fr}.plan-line{font-size:11px}.detail-head,.detail-body{padding-left:14px;padding-right:14px}}
+  </style>
+  <style>
+    .more-candidates{border-top:1px solid var(--line)}.more-candidates summary{padding:10px 14px;color:var(--teal);font-size:12px;cursor:pointer}.more-candidates[open] summary{border-bottom:1px solid #edf2f5}
+  </style>
+</head>
+<body>
+<main class="shell">
+  <header class="top">
+    <div>
+      <p class="eyebrow">KUBERNETES / RETRIEVAL LAB</p>
+      <h1>同一问题，看三种排序</h1>
+      <p class="subtitle">关键词、语义相似度与排名融合，放在一页里观察。</p>
+      <p class="notice">当前范围为选定的 11 篇文档子集，不是全量 Kubernetes 文档；索引数量按“块”计。</p>
+    </div>
+    <div class="badges"><span class="badge">本地学习</span><span id="corpus-badge" class="badge neutral">读取索引计划…</span></div>
+  </header>
+
+  <form id="search-form" class="controls">
+    <label for="query" class="field-label">检索问题</label>
+    <div class="query-row">
+      <input id="query" type="search" maxlength="2000" required autocomplete="off" spellcheck="false" disabled aria-describedby="query-help">
+      <div class="actions">
+        <button id="bm25-button" class="action" type="submit" disabled><span>仅查 BM25</span><small>本地计算 · 零模型请求</small></button>
+        <button id="hybrid-button" class="action primary" type="button" disabled><span>运行三路对照</span><small>问题编码 1 次 + 身份核对 2 次</small></button>
+      </div>
+    </div>
+    <div class="plan-line"><span id="plan-scope">正在核对已有索引与检索范围…</span><span id="query-help">只点击“三路对照”才会发送当前问题给本地模型。</span></div>
+    <div id="status-row" class="status-row" role="status" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span id="status">正在读取计划；尚未运行检索。</span></div>
+    <p id="error" class="error" role="alert" hidden></p>
+  </form>
+
+  <section class="workspace" aria-labelledby="results-title">
+    <div class="section-head"><h2 id="results-title">排序对照</h2><p id="result-summary" class="result-summary">先看关键词，再观察两路如何互补</p></div>
+    <div id="columns" class="columns" aria-busy="false">
+      <section class="route bm25" aria-labelledby="bm25-title">
+        <header class="route-head"><div class="route-name"><h3 id="bm25-title">BM25</h3><span id="bm25-count" class="route-count">关键词</span></div><p>找出与问题用词重合的文本块</p></header>
+        <ol id="bm25-list" class="hit-list" hidden></ol><details id="bm25-more" class="more-candidates" hidden><summary id="bm25-more-label"></summary><ol id="bm25-more-list" class="hit-list"></ol></details><div id="bm25-empty" class="empty"><p class="empty-step">01 / 关键词匹配</p><strong>为什么这一块会被找到？</strong><p>先运行“仅查 BM25”，观察命中词和原文。</p></div>
+      </section>
+      <section class="route dense" aria-labelledby="dense-title">
+        <header class="route-head"><div class="route-name"><h3 id="dense-title">Dense</h3><span id="dense-count" class="route-count">余弦相似度</span></div><p>用问题向量搜索已保存的文档向量</p></header>
+        <ol id="dense-list" class="hit-list" hidden></ol><details id="dense-more" class="more-candidates" hidden><summary id="dense-more-label"></summary><ol id="dense-more-list" class="hit-list"></ol></details><div id="dense-empty" class="empty"><p class="empty-step">02 / 语义相似</p><strong>换一种说法，还能找到吗？</strong><p>三路对照会编码当前问题一次，文档无需重新编码。</p></div>
+      </section>
+      <section class="route rrf" aria-labelledby="rrf-title">
+        <header class="route-head"><div class="route-name"><h3 id="rrf-title">RRF</h3><span id="rrf-count" class="route-count">排名融合</span></div><p>只使用两路名次，计算各自的贡献</p></header>
+        <ol id="rrf-list" class="hit-list" hidden></ol><div id="rrf-empty" class="empty"><p class="empty-step">03 / 排名融合</p><strong>两路共同找到的块会怎样？</strong><p>每路贡献 1 /（常数 + 名次），在本地相加。</p></div>
+      </section>
+    </div>
+    <p class="explain"><span class="marker" aria-hidden="true">↳</span><span>三列默认展示相同数量的前排候选；折叠的额外召回仍全部参与 RRF。点选同一块可对照其原始召回名次、查看原文。三种分数的尺度不同，不能横向比较数值大小。</span></p>
+  </section>
+
+  <section id="detail" class="detail" aria-labelledby="detail-title" hidden>
+    <header class="detail-head"><div class="detail-overline"><span class="detail-label">选中同一文本块</span><div id="rank-strip" class="rank-strip"></div></div><h2 id="detail-title"></h2></header>
+    <div class="detail-body"><dl id="detail-metadata" class="metadata"></dl><p id="excerpt-label" class="text-label"></p><pre id="excerpt" class="passage"></pre><details id="full-text" class="full-text"><summary>展开该块完整原文</summary><pre id="full-passage" class="passage"></pre></details></div>
+  </section>
+
+  <p class="boundary"><strong>这里展示候选证据，不生成答案。</strong>RRF 排名靠前不保证内容更准确；相似度不是概率。文档中的代码只作为文字展示，不执行命令。</p>
+  <p id="notice" class="notice"></p>
+  <footer class="footer"><span>同一份正文 · 同一检索范围 · 不重排 · 不调用聊天模型</span><span id="request-summary">首次打开只读取计划，模型请求为 0。</span></footer>
+</main>
+<script>
+"use strict";
+// 所有语料和接口文本只通过 textContent 展示；页面没有外部资源或自动 POST。
+const byId = id => document.getElementById(id);
+const routeNames = {bm25:"BM25",dense:"Dense",rrf:"RRF"};
+const state = {plan:null,data:null,busy:false,selected:null,sequence:0};
+function node(tag,className,text){const item=document.createElement(tag);if(className)item.className=className;if(text!==undefined)item.textContent=String(text);return item;}
+function setStatus(message,busy=false){byId("status").textContent=message;byId("status-row").classList.toggle("busy",busy);}
+function setBusy(busy){state.busy=busy;for(const id of ["query","bm25-button","hybrid-button"])byId(id).disabled=busy||!state.plan;byId("columns").setAttribute("aria-busy",String(busy));}
+function showError(message){byId("error").textContent=message;byId("error").hidden=false;}
+function clearResults(){state.data=null;state.selected=null;byId("detail").hidden=true;for(const key of Object.keys(routeNames)){byId(key+"-list").replaceChildren();byId(key+"-list").hidden=true;if(key!=="rrf"){byId(key+"-more-list").replaceChildren();byId(key+"-more").hidden=true;byId(key+"-more").open=false;}}}
+function showEmpty(key,title,message){const box=byId(key+"-empty");box.replaceChildren(node("strong","",title),node("p","",message));box.hidden=false;}
+function pendingResults(mode){clearResults();for(const key of Object.keys(routeNames)){byId(key+"-count").textContent="待检索";showEmpty(key,"等待本轮结果",key!=="bm25"&&mode==="bm25"?"本轮只运行 BM25。":"正在核对与计算，完成后展示候选。");}byId("result-summary").textContent="正在处理当前问题…";}
+function safeSource(value){if(typeof value!=="string")return null;try{const url=new URL(value);return ["http:","https:"].includes(url.protocol)&&!url.username&&!url.password?url.href:null;}catch{return null;}}
+function number(value,digits){return typeof value==="number"&&Number.isFinite(value)?value.toFixed(digits):"—";}
+function recordFor(id){const records=state.data.records;return Object.prototype.hasOwnProperty.call(records,id)?records[id]:null;}
+function preview(text,limit){const chars=Array.from(text);return chars.slice(0,limit).join("")+(chars.length>limit?"…":"");}
+function makeHit(key,hit){
+  const record=recordFor(hit.chunk_id),metadata=record.metadata||{},item=node("li","hit");item.dataset.chunkId=hit.chunk_id;
+  const button=node("button","card-select");button.type="button";button.setAttribute("aria-pressed","false");button.setAttribute("aria-controls","detail");
+  const title=typeof metadata.title==="string"&&metadata.title?metadata.title:"未记录标题";
+  button.setAttribute("aria-label",`${routeNames[key]} 第 ${hit.rank} 名，${title}，块 ${hit.chunk_id}。查看该块原文与各路排名。`);
+  const top=node("span","card-top");top.append(node("span","rank",hit.rank),node("span","score",`${key==="dense"?"COSINE":routeNames[key]} ${number(hit.score,key==="rrf"?6:4)}`));
+  button.append(top,node("span","card-title",title),node("span","chunk-id",hit.chunk_id),node("span","snippet",preview(record.text,160)));
+  button.addEventListener("click",()=>selectChunk(hit.chunk_id));item.append(button);
+  if(key==="bm25"){
+    const footer=node("div","card-foot"),terms=node("div","terms");terms.append(node("span","","命中词"));for(const term of hit.matched_terms||[])terms.append(node("span","term",term));footer.append(terms);item.append(footer);
+  }else if(key==="rrf"){
+    const footer=node("div","card-foot");for(const source of ["bm25","dense"]){const rank=hit.ranks&&hit.ranks[source],value=hit.contributions&&hit.contributions[source];footer.append(node("span","contribution",rank?`${routeNames[source]} #${rank} → 1/(${state.data.rrf_constant}+${rank}) = ${number(value,6)}`:`${routeNames[source]} 未入召回列表 · 贡献 0`));}item.append(footer);
+  }
+  return item;
+}
+function addMetadata(label,value){byId("detail-metadata").append(node("dt","",label),node("dd","",value));}
+function selectChunk(id,reveal=true){
+  if(!state.data)return;const record=recordFor(id);if(!record)return;state.selected=id;
+  if(reveal)for(const key of ["bm25","dense"]){const index=state.data.routes[key].findIndex(candidate=>candidate.chunk_id===id);if(index>=state.data.top_k)byId(key+"-more").open=true;}
+  for(const item of document.querySelectorAll(".hit")){const selected=item.dataset.chunkId===id;item.classList.toggle("selected",selected);item.querySelector("button").setAttribute("aria-pressed",String(selected));}
+  const metadata=record.metadata||{};byId("detail-title").textContent=metadata.title||"未记录标题";
+  const strip=byId("rank-strip");strip.replaceChildren();for(const key of Object.keys(routeNames)){const hit=state.data.routes[key].find(candidate=>candidate.chunk_id===id);strip.append(node("span","rank-chip "+key,`${routeNames[key]} ${hit?"#"+hit.rank:"未入列"}`));}
+  byId("detail-metadata").replaceChildren();addMetadata("块 ID",id);
+  const sections=Array.isArray(metadata.sections)?metadata.sections.filter(Array.isArray).map(path=>path.map(String).join(" / ")).join(" ｜ "):"";addMetadata("章节",sections||"未记录");
+  const url=safeSource(metadata.source_url),source=node("dd");if(url){const link=node("a","",url);link.href=url;link.target="_blank";link.rel="noopener noreferrer";source.append(link);}else{source.textContent=metadata.source||"未记录可用的来源链接";}byId("detail-metadata").append(node("dt","","来源"),source);
+  addMetadata("版本 / 审核",`${metadata.kubernetes_release||"版本未确认"} · ${metadata.review_status||"审核状态未记录"}`);
+  if(metadata.snapshot_commit)addMetadata("快照",metadata.snapshot_commit);
+  const chars=Array.from(record.text),truncated=chars.length>650;byId("excerpt-label").textContent=truncated?`正文摘录 · 前 650 / ${chars.length} 字符（仅展示截断，检索使用完整正文）`:`完整正文 · ${chars.length} 字符`;
+  byId("excerpt").textContent=preview(record.text,650);byId("full-text").hidden=!truncated;byId("full-text").open=false;byId("full-passage").textContent=truncated?record.text:"";byId("detail").hidden=false;
+}
+function validateData(data){
+  if(!data||typeof data.query!=="string"||!["bm25","hybrid"].includes(data.mode)||!Number.isInteger(data.top_k)||data.top_k<1||!data.routes||!data.records||typeof data.records!=="object"||Array.isArray(data.records))throw new Error("返回结果的结构不完整");
+  for(const key of Object.keys(routeNames)){
+    if(!Array.isArray(data.routes[key]))throw new Error("缺少检索路线结果");
+    const seen=new Set();for(const hit of data.routes[key]){const record=typeof hit.chunk_id==="string"&&Object.prototype.hasOwnProperty.call(data.records,hit.chunk_id)?data.records[hit.chunk_id]:null;if(!record||typeof record.text!=="string"||!Number.isInteger(hit.rank)||hit.rank<=0||typeof hit.score!=="number"||!Number.isFinite(hit.score)||seen.has(hit.chunk_id))throw new Error("候选身份或分数不完整");seen.add(hit.chunk_id);}
+  }
+}
+function renderResults(data){
+  validateData(data);state.data=data;state.selected=null;
+  for(const key of Object.keys(routeNames)){
+    const hits=data.routes[key],visible=key==="rrf"?hits:hits.slice(0,data.top_k),list=byId(key+"-list");list.replaceChildren(...visible.map(hit=>makeHit(key,hit)));list.hidden=!hits.length;byId(key+"-empty").hidden=Boolean(hits.length);byId(key+"-count").textContent=visible.length<hits.length?`前 ${visible.length} / ${hits.length} 块`:`${hits.length} 块`;
+    if(key!=="rrf"){const extra=hits.slice(data.top_k),more=byId(key+"-more");more.open=false;more.hidden=!extra.length;byId(key+"-more-label").textContent=`展开全部 ${hits.length} 条召回（另 ${extra.length} 块）`;const extraList=byId(key+"-more-list");extraList.setAttribute("start",String(data.top_k+1));extraList.replaceChildren(...extra.map(hit=>makeHit(key,hit)));}
+    if(!hits.length){if(data.mode==="bm25"&&key!=="bm25")showEmpty(key,"本轮未运行",key==="dense"?"点击“三路对照”，才会编码问题并查询已有向量。":"完成两路召回后，才会在本地计算 RRF。");else if(key==="bm25")showEmpty(key,"没有关键词重合的候选","这不代表知识库没有相关内容。可以换一种说法，或运行三路对照观察 Dense。 ");else showEmpty(key,"本轮没有候选","请核对问题与当前检索范围。");}
+  }
+  const counts=data.request_counts||{},tokens=Array.isArray(data.tokens)?data.tokens:[];
+  byId("result-summary").textContent=`同范围 ${data.scope_count} 块 · 每路最多 ${data.recall_k} 块 · 融合最多 ${data.top_k} 块 · RRF 常数 ${data.rrf_constant}`;
+  byId("request-summary").textContent=`本轮：问题编码 ${counts.embedding??0} · HTTP ${counts.http??0} · 重排 ${counts.reranker??0} · 聊天 ${counts.chat??0}`;
+  byId("notice").textContent=typeof data.notice==="string"?data.notice:"";
+  setStatus(`${data.mode==="bm25"?"BM25 本地检索完成，模型请求为 0。":"三路对照完成，问题只编码一次，RRF 在本地计算。"} 问题分词：${tokens.length?tokens.join(" / "):"过滤后没有有效词"}`);
+  const first=data.routes.rrf[0]||data.routes.bm25[0]||data.routes.dense[0];if(first)selectChunk(first.chunk_id,false);
+}
+async function compare(mode){
+  if(state.busy||!state.plan)return;const query=byId("query").value.trim();if(!query){byId("query").reportValidity();byId("query").focus();return;}
+  const sequence=++state.sequence;setBusy(true);byId("error").hidden=true;pendingResults(mode);byId("request-summary").textContent="本轮请求进行中；等待服务返回实际计数。";
+  setStatus(mode==="bm25"?"正在本地计算 BM25，不请求模型…":"正在核对已有索引、编码当前问题并计算三路排序…",true);
+  try{
+    const response=await fetch("/api/compare",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{"Content-Type":"application/json","X-Retrieval-Lab":"1"},body:JSON.stringify({query,mode})});
+    const data=await response.json();if(sequence!==state.sequence)return;if(!response.ok)throw new Error(typeof data.detail==="string"?data.detail:"本轮检索未完成");if(data.query!==query||data.mode!==mode)throw new Error("结果与本轮问题或模式不一致");renderResults(data);
+  }catch(error){
+    if(sequence!==state.sequence)return;clearResults();for(const key of Object.keys(routeNames)){byId(key+"-count").textContent="未展示";showEmpty(key,"本轮未完成","为避免混淆，已清空上一次的候选。");}byId("result-summary").textContent="本轮没有可展示的结果";byId("request-summary").textContent="本轮未返回完整计数；不会自动重试。";showError("检索停止："+(error instanceof Error?error.message:"请检查本地服务状态"));setStatus("可调整问题后重新点击运行；不会自动重试。");
+  }finally{if(sequence===state.sequence)setBusy(false);}
+}
+byId("search-form").addEventListener("submit",event=>{event.preventDefault();compare("bm25");});
+byId("hybrid-button").addEventListener("click",()=>compare("hybrid"));
+byId("query").addEventListener("input",()=>{
+  if(state.busy||!state.data||byId("query").value.trim()===state.data.query)return;clearResults();for(const key of Object.keys(routeNames)){byId(key+"-count").textContent="待检索";showEmpty(key,"问题已修改","点击上方按钮，查看当前问题的排序。");}byId("result-summary").textContent="等待检索当前问题";byId("error").hidden=true;setStatus("问题已修改，尚未发送新请求。");
+});
+async function init(){
+  try{
+    const response=await fetch("/api/plan",{credentials:"same-origin",cache:"no-store"});const plan=await response.json();if(!response.ok)throw new Error(typeof plan.detail==="string"?plan.detail:"计划读取失败");if(typeof plan.query!=="string"||!Number.isInteger(plan.document_count)||plan.document_count<1)throw new Error("索引计划不完整");
+    state.plan=plan;byId("query").value=plan.query;byId("corpus-badge").textContent=`${plan.document_count} 块已索引`;byId("plan-scope").textContent=`范围：当前子集 ${plan.document_count} 块 · 每路最多 ${plan.recall_k} 块 · 融合最多 ${plan.top_k} 块 · RRF 常数 ${plan.rrf_constant}`;byId("notice").textContent=typeof plan.notice==="string"?plan.notice:"";setBusy(false);setStatus("计划已就绪。尚未运行检索，模型请求为 0。");
+  }catch(error){byId("corpus-badge").textContent="计划未就绪";byId("plan-scope").textContent="请通过本地检索服务地址打开此页面。";showError("无法读取计划："+(error instanceof Error?error.message:"请检查本地服务"));setStatus("未发送检索或模型请求；请确认本地服务运行后刷新页面。");}
+}
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+# 本地密钥；保留以后可以提交的配置模板。
+.env
+.env.*
+!.env.example
+
+# Python 运行产生的缓存。
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+/build/
+/dist/
+
+# macOS 文件管理器生成的文件。
+.DS_Store
+
+# Milvus Lite演示数据库与锁文件；不包含代码或原始知识库。
+/data/milvus_smoke/
+
+# 知识库向量索引与构建清单，不提交生成数据。
+/data/milvus_indexes/
+
+# Kubernetes 上游文档快照仅保存在本地；保留旁边的来源清单与项目代码。
+/knowledge/kubernetes_zh/upstream/
+
+# 批量处理后生成的Kubernetes语料与报告；保留生成脚本和上游来源清单。
+/data/k8s_corpora/
+
+# 本地Embedding编码缓存（SQLite检查点）。
+/data/embedding_cache/
+
+# 本地身份、个人材料、运行报告和待核验截图，不进入公开仓库。
+/.vscode/
+/docs/reference/
+/reports/
+/assets/
+/docs/learning/
+
+# 原接口资料含本机/内网配置，保留本地；只提交脱敏示例。
+/docs/model_apis/*
+!/docs/model_apis/*.example.md
+!/docs/model_apis/README.md
+/models/*
+!/models/.env.example

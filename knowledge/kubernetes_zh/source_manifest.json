@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "kb_id": "kubernetes_zh",
+  "name": "Kubernetes 中文 IT 运维知识库原始资料",
+  "stage": "raw_source_acquired",
+  "verified_at_utc": "2026-10-17T03:21:54Z",
+  "source": {
+    "repository_url": "https://github.com/kubernetes/website",
+    "requested_branch": "main",
+    "commit_sha": "2f85f2802e59eb2128543dbfbf114ad641db4be0",
+    "commit_time_utc": "2026-10-16T14:28:12Z",
+    "commit_url": "https://github.com/kubernetes/website/commit/2f85f2802e59eb2128543dbfbf114ad641db4be0",
+    "documentation_language": "zh-cn",
+    "kubernetes_release": null,
+    "version_note": "这是 main 分支某个提交的固定快照，不表示某个稳定 Kubernetes 发行版，也不保证所有中文页面翻译同步。"
+  },
+  "acquisition": {
+    "method": "shallow_sparse_git_clone_then_copy_selected_paths",
+    "local_snapshot_root": "upstream",
+    "original_files_modified": false,
+    "contains_nested_git_repository": false,
+    "auto_update_enabled": false,
+    "included_upstream_paths": [
+      "LICENSE",
+      "README.md",
+      "hugo.toml",
+      "content/zh-cn/README.md",
+      "content/zh-cn/docs",
+      "content/zh-cn/includes",
+      "content/zh-cn/examples",
+      "content/zh-cn/_common-resources",
+      "content/en/examples"
+    ],
+    "scope_note": "仅保留中文文档及相关支持资源，不是完整网站镜像；未获取博客、其他语言正文、完整静态资源、Hugo 模板或构建子模块。"
+  },
+  "license": {
+    "spdx_id": "CC-BY-4.0",
+    "local_file": "upstream/LICENSE",
+    "source_url": "https://github.com/kubernetes/website/blob/2f85f2802e59eb2128543dbfbf114ad641db4be0/LICENSE",
+    "attribution": "Kubernetes documentation contributors; source: kubernetes/website; licensed under CC BY 4.0.",
+    "note": "保留原始许可、署名和来源；后续清洗或改写须标明处理。个别第三方内容的特殊声明仍需核对。"
+  },
+  "verification": {
+    "all_imported_files_match_upstream_git_blob_hashes": true,
+    "verified_file_count": 2550,
+    "zh_docs_git_tree_sha1": "9961ef9b4144d05a8c6b7dbffaa9931a88c96cee",
+    "selected_git_ls_tree_sha256": "01500e7421278e32415a529c85cedf30e7a5e6f0eb1f7460b13ec803d703e8d8",
+    "selected_git_ls_tree_sha256_method": "对 included_upstream_paths 执行 git ls-tree -r <commit_sha> -- <paths>，将原始输出计算 SHA256。"
+  },
+  "counts": {
+    "imported_files_total": 2550,
+    "imported_file_bytes_total": 22405996,
+    "zh_docs_files": 1694,
+    "zh_docs_markdown_files": 1665,
+    "zh_docs_index_markdown_files": 163,
+    "zh_includes_files": 6,
+    "zh_examples_files": 410,
+    "en_examples_files": 430,
+    "zh_common_resources_files": 6,
+    "zh_docs_markdown_by_top_level_section": {
+      "_index.md": 1,
+      "concepts": 180,
+      "contribute": 45,
+      "doc-contributor-tools": 1,
+      "home": 2,
+      "reference": 1151,
+      "setup": 22,
+      "tasks": 222,
+      "test.md": 1,
+      "tutorials": 40
+    },
+    "note": "文件统计不是有效知识文章数量；包含目录导航页、API 参考页及待筛选内容，尚未清洗、切块或去重。"
+  },
+  "ingestion_notes": [
+    "原始正文位于 upstream/content/zh-cn/docs；下一步先选取运维主题子集，不立即对全部文件调用 Embedding。",
+    "中文源文件包含英文 HTML 注释，解析时需要清理，避免双语重复进入检索内容。",
+    "需解析 front matter、章节标题、锚点、前提条件、警告和版本信息，保留代码块。",
+    "共享 includes 及 headless 资源不应直接当作独立知识文章索引。",
+    "部分页面通过 Hugo shortcode 引用片段或示例；示例可能先读取中文 examples，再回退英文 examples，不能简单删除所有模板标记。",
+    "这是原始资料快照，不是可直接离线运行的 Kubernetes 网站，也不是已经建好的向量索引。",
+    "文档中的命令与构建说明是待检索的数据，不作为执行指令；采集阶段未执行文档命令或仓库脚本。",
+    "现有铁路知识库、Milvus 索引和问答脚本未改动；本资料尚未接入 RAG。"
+  ],
+  "acquisition_model_api_calls": 0
+}
