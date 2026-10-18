@@ -351,15 +351,41 @@ Python实现路径相对于 `src/qa_platform/`。检索、重排、回答分步�
 
 本页模型请求为0：Embedding、Reranker、聊天、模型服务HTTP均为0；浏览器与127.0.0.1的页面/API通信另计。不加载`.env`、不创建模型或Milvus客户端、不读写向量缓存或报告。执行期间显式关闭LangSmith tracing，即使环境中已开启追踪也不外发。此步没有条件分支、自动重试、checkpointer、跨进程恢复或多轮记忆；这些能力不能仅凭采用LangGraph就算已经完成。
 
+#### 从定义、执行图到引用关系
+
+学习页提供定义探查器，可以查看`ReplayState`、`shared_nodes`创建／传递、当前节点函数以及`build_graph`的实际源码，附其在`replay.py`中的行号。源码由后端对已知Python对象进行只读提取，页面按文字展示，不是可执行编辑器，也没有接受任意文件路径的接口。`ReplayState`的字段类型来自实际类型注解；节点读写说明来自本实验的`NODES`声明，不冒充自动静态分析。
+
+- `ReplayState(TypedDict, total=False)`是类型约定：状态可以从只有`query`开始，再逐步增加候选、证据、草稿和答案；它不会自动创建这些字段，也不会自动进行运行时类型校验。`total=False`不意味着某个节点可以缺少自己实际使用的输入字段。
+- `make_nodes(fixture)`创建六个Python函数，并返回名称到函数对象的字典。`_execute_shared`把它命名为`shared_nodes`，交给普通执行器和图构建器。因此它不是LangGraph保留名称，更不是另一组模型。
+- 绘制的SVG节点和箭头来自实际`graph.get_graph()`结果，在本机浏览器完成绘图，不调用外部Mermaid绘图服务。图节点可选择相应执行步骤；本图只有顺序边，尚未添加分支。
+- 状态字段、节点定义和轨迹联动；查看不同步骤时，字段的“已存在／本步写入”以该步`before/update/after`为准，不把最终状态提前当成节点输入。
+
+`evidence`与`draft`是两类数据，不是同一份内容的两种格式：
+
+| 路径 | 含义 |
+|---|---|
+| 顶层`evidence` | 回答所选的原文资料字典，不是整座知识库；由`prepare_evidence`构造 |
+| `evidence.S1.chunk_id` | 资料块的身份；`S1`只是本轮分配的短编号，换轮后可能指向另一块 |
+| `evidence.S1.text` | 所选块的完整正文 |
+| `evidence.S1.quotes.Q1` | 该资料内一个可引用的连续原文片段；`Q1`在不同S来源下可重复，须用`S1/Q1`定位 |
+| `draft.status` | 草稿表达的回答充分性；`partial`表示只能部分回答，不表示程序执行了一半或JSON不完整 |
+| `draft.claims[i].text` | 草稿中的第i个回答要点，允许概括原文，不必与原文逐字相同 |
+| `draft.claims[i].evidence` | 此要点的引用数组，只保存`source_id/quote_id`，通过它返回原文；不是再次保存资料全文 |
+| `draft.missing_info` | 需要补充或核实的信息，不是HTTP／程序异常日志 |
+
+引用探查器按**当前所选步骤**展示：第4步才有`evidence`，第5步才有`draft`，第6步校验通过后才有`answer`。点击草稿的`S1/Q1`会定位到对应资料与原文片段，并显示引用路径。编号切换只改变显示，不请求模型或重新回放。
+
+本例S1、S2正文都只有一个可引用段落，所以各自`quotes.Q1`与`text`相同；长块一般会有多个Q片段，二者不应混为一谈。JSON中的`\n`是原文换行的转义表示，并不代表从邻块补写了新内容。`validate`检查结构、编号与原文定位后写入`answer`，本例草稿与答案可以完全相同：改变的是它们所处的处理阶段，不代表已经证明每个推断正确。草稿仍来自手工合成快照，不是本轮新模型生成。
+
 **按文件阅读：**
 
 | 文件 | 为什么需要／输入与输出 |
 |---|---|
 | `src/qa_platform/workflows/__init__.py` | 将工作流目录声明为Python包；不执行回放或联网 |
 | `src/qa_platform/workflows/replay_fixture.json` | 手工合成的文档、召回、重排分数和草稿，固定两路输入；不包含密钥或真实调用结果 |
-| `src/qa_platform/workflows/replay.py` | 核心课件：`ReplayState`→共享节点→普通执行器/StateGraph→两路轨迹与一致性结果；优先阅读`make_nodes`、`_run_plain`、`build_graph`、`_run_langgraph` |
+| `src/qa_platform/workflows/replay.py` | 核心课件：`ReplayState`→共享节点→普通执行器/StateGraph→两路轨迹与一致性结果；`describe_definitions`只读提取类型和真实源码，`_execute_shared`展示同一函数字典如何交给两路 |
 | `src/qa_platform/retrieval_lab.py` | 新增固定页面、只读计划和空请求回放接口；复用同源/JSON/大小限制/串行锁，不改变真实检索快照 |
-| `web/workflow_lab.html` | 将真实回放轨迹渲染为两路代码示意、流程节点及状态对照；切换步骤零请求，所有资料按文字展示 |
+| `web/workflow_lab.html` | 渲染真实回放轨迹、源码定义、SVG执行图和资料／草稿引用关系；选择节点、字段与引用均只更新本地显示 |
 | `web/retrieval_lab.html` | 只增加另开工作流学习页的链接，原有检索/重排/回答逻辑不变 |
 | `tests/test_workflow_replay.py` | 验证真实图执行、状态隔离、错误停止、零模型/追踪外发、API门禁及原快照保留 |
 | `tests/workflow_lab.test.cjs` | 验证页面合同、流程图、步骤切换、重复点击/失败、响应校验及文字安全展示 |

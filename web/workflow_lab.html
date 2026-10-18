@@ -9,7 +9,8 @@
   <style>
     :root{color-scheme:light;--bg:#f4f6f8;--paper:#fff;--ink:#223447;--muted:#596b7d;--line:#d9e2e8;--teal:#116c65;--soft:#e7f3f0;--python:#587d99;--graph:#8170a2;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
     *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}button{font:inherit;cursor:pointer}button:disabled{cursor:default;opacity:.5}button,a,summary{touch-action:manipulation}button:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #169f94;outline-offset:3px}[hidden]{display:none!important}h1,h2,h3,p{margin:0}a{color:var(--teal)}.shell{max-width:1360px;margin:auto;padding:30px 28px 42px}.top{display:flex;justify-content:space-between;align-items:start;gap:24px;margin-bottom:20px}.eyebrow{font-size:11px;color:var(--teal);letter-spacing:.14em}h1{font-size:27px;font-weight:650;margin-top:3px}.subtitle{color:var(--muted);font-size:14px;margin-top:6px}.back{font-size:13px;white-space:nowrap}.panel{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:20px;margin-top:18px}.intro{margin-top:0}.tags,.checks{display:flex;gap:7px;flex-wrap:wrap}.tag{font-size:12px;background:var(--soft);color:#195e56;border-radius:5px;padding:3px 9px}.tag.neutral{background:#e9eef2;color:var(--muted)}.query{font-size:19px;font-weight:550;margin:14px 0 9px}.notice{color:var(--muted);font-size:12px;overflow-wrap:anywhere}.important{color:#795215;background:#fff7e8;border:1px solid #e8d7b7;border-radius:7px;padding:10px 13px;font-size:13px;margin-top:13px}.run-row{display:flex;gap:18px;align-items:center;margin-top:17px}.primary,.secondary{border:1px solid #b8cbd1;border-radius:7px;padding:9px 16px;line-height:1.45;color:var(--teal);background:white}.primary{background:var(--teal);border-color:var(--teal);color:white;text-align:left;min-width:235px}.primary strong,.primary small{display:block}.primary strong{font-size:14px}.primary small{font-size:11px;color:#d4efea;margin-top:3px}.primary:hover:not(:disabled){background:#085b55}.secondary:hover:not(:disabled){background:var(--soft)}.status{font-size:13px;color:var(--muted)}.error{padding:11px 14px;border:1px solid #e7c5c1;background:#fff0ef;border-radius:7px;color:#8b332b;font-size:13px;margin-top:12px}.section-head{display:flex;justify-content:space-between;align-items:baseline;gap:15px;flex-wrap:wrap;margin-bottom:12px}h2{font-size:18px;font-weight:650}h3{font-size:15px;font-weight:650}.diagram{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin-top:14px}.graph-node{border:1px solid #cbd6df;border-radius:7px;background:#f8fafb;padding:7px 10px;font-size:12px;text-align:center;min-width:80px}.graph-node small{display:block;font:10px/1.5 var(--mono);color:var(--muted)}.graph-node.selected{background:#eee9f4;border-color:var(--graph);box-shadow:0 0 0 1px var(--graph)}.graph-node.terminal{min-width:55px;background:#edf3f4;color:var(--muted);font-family:var(--mono)}.arrow{color:#99a9b4;font-size:17px}.graph-edges{font:11px/1.8 var(--mono);color:var(--muted);margin-top:9px;overflow-wrap:anywhere}.graph-plan{font-size:12px;color:var(--muted);margin-top:10px}.checks{margin-top:12px}.check{background:var(--soft);border:1px solid #cde1da;color:#1b6559;border-radius:5px;font-size:12px;padding:4px 9px}.navigator{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.step-count{font:12px/1.8 var(--mono);color:var(--muted)}.step-list{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;list-style:none;padding:0;margin:13px 0 0}.step-button{border:1px solid var(--line);border-radius:7px;padding:9px 10px;background:#fff;text-align:left;color:var(--ink);width:100%;height:100%;font-size:12px}.step-button span{font:10px var(--mono);color:var(--muted);display:block;margin-top:4px;overflow-wrap:anywhere}.step-button.selected{border-color:var(--teal);background:#edf7f4;box-shadow:0 0 0 1px var(--teal)}.step-description{font-size:13px;color:var(--muted);margin-top:12px}.columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:17px;margin-top:17px}.route{min-width:0;background:white;border:1px solid var(--line);border-radius:9px;overflow:hidden;--route:var(--python)}.route.graph{--route:var(--graph)}.route-head{border-top:3px solid var(--route);border-bottom:1px solid var(--line);padding:15px 17px}.route-head h2{color:var(--route);font-size:17px}.route-head p{font-size:12px;color:var(--muted);margin-top:4px}.route-body{padding:15px}.code{padding:11px 0;background:#f5f7f9;border:1px solid #e3e9ee;border-radius:6px;font:11px/1.85 var(--mono);overflow:auto;margin:8px 0 13px}.code-line{display:block;padding:0 11px;white-space:pre;min-width:max-content}.code-line.active{background:#e0eee9;border-left:3px solid var(--teal);padding-left:8px;color:#144f46}.code-line.current{background:#ece7f3;border-left:3px solid var(--graph);padding-left:8px}.phase{border:1px solid var(--line);border-radius:6px;margin-top:9px;overflow:hidden}.phase summary{padding:8px 11px;font-size:12px;background:#fafcfd;cursor:pointer}.phase.update{border-color:#b6d5ca}.phase.update summary{background:#edf7f1;color:#1b6559}.phase pre{margin:0;padding:11px;font:11px/1.8 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto}.phase-label{color:var(--muted);font-size:11px;margin-top:6px}.answer{font-size:13px;background:#f5f8f9;border:1px solid #e1e9ed;border-radius:7px;padding:13px;margin-top:12px;white-space:pre-wrap;overflow-wrap:anywhere}.summary-details{margin-top:12px;font-size:12px;color:var(--muted)}.summary-details summary{cursor:pointer;color:var(--teal)}.summary-details pre{font:11px/1.8 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f8fa;border:1px solid var(--line);border-radius:5px;padding:12px;max-height:400px;overflow:auto}.learning{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px;margin-top:13px}.learning p{font-size:12px;color:var(--muted);margin-top:4px}.boundary{font-size:12px;color:var(--muted);border-top:1px solid var(--line);padding-top:16px;margin-top:22px}.footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin-top:13px}
-    @media(max-width:850px){.shell{padding:23px 19px 32px}.step-list{grid-template-columns:repeat(3,minmax(0,1fr))}.columns{gap:12px}.route-body{padding:12px}.learning{grid-template-columns:1fr}.query{font-size:17px}.panel{padding:17px}}@media(max-width:600px){.top{flex-direction:column;gap:8px}h1{font-size:23px}.run-row{align-items:stretch;flex-direction:column;gap:10px}.columns{grid-template-columns:1fr}.primary{width:100%}.graph-node{min-width:74px}.shell{padding:18px 13px 28px}.panel{padding:14px}.step-list{grid-template-columns:repeat(2,minmax(0,1fr))}.notice{font-size:11px}.navigator{gap:7px}.secondary{font-size:12px;padding:7px 11px}}
+    .diagram{display:block;overflow-x:auto;padding:8px 0}.graph-svg{display:block;min-width:0;width:100%;height:auto}.graph-svg.horizontal{min-width:1200px}.graph-svg.vertical{max-width:420px;margin:auto}.graph-svg .graph-node{cursor:pointer;outline:none}.graph-svg .graph-node rect{fill:#f8fafb;stroke:#cbd6df;stroke-width:1.5}.graph-svg .graph-node.selected rect{fill:#eee9f4;stroke:var(--graph);stroke-width:3}.graph-svg .graph-node.viewed rect{fill:#edf7f4}.graph-svg .graph-node:focus-visible rect{stroke:var(--teal);stroke-width:4}.graph-svg text{font:12px system-ui,sans-serif;fill:var(--ink)}.graph-svg .node-id{font:10px var(--mono);fill:var(--muted)}.graph-svg .node-status{font:10px system-ui,sans-serif;fill:var(--muted)}.graph-svg .edge-line{stroke:#7b8f9e;stroke-width:1.5;fill:none}.graph-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:5px}.definition-tabs,.registry,.field-list{display:flex;flex-wrap:wrap;gap:7px}.definition-tabs button,.registry button,.field-list button,.reference-button{border:1px solid #cbd8df;border-radius:5px;background:#fff;color:var(--ink);padding:6px 10px;font:12px/1.5 var(--mono)}.definition-tabs button.selected,.registry button.selected,.field-list button.selected,.reference-button.selected{background:#e8f4f0;border-color:var(--teal);box-shadow:0 0 0 1px var(--teal)}.definition-note{font-size:12px;color:var(--muted);margin:10px 0}.definition-location{font:11px/1.8 var(--mono);overflow-wrap:anywhere;color:var(--teal);margin-top:10px}.definition-code{margin:7px 0 12px;max-height:360px;overflow:auto;background:#f5f7f9;border:1px solid var(--line);border-radius:6px;font:11px/1.8 var(--mono);padding:10px}.source-line{display:block;white-space:pre;min-width:max-content}.source-number{display:inline-block;width:4em;margin-right:12px;color:#82909e;text-align:right;user-select:none}.definition-grid{display:grid;grid-template-columns:1.1fr 1fr;gap:20px;margin-top:16px}.field-list button{font-family:var(--mono);text-align:left}.field-list small{display:block;color:var(--muted);font:10px/1.5 system-ui,sans-serif}.field-detail{margin-top:12px;padding:11px;background:#f7fafb;border:1px solid var(--line);border-radius:6px;font-size:12px;overflow-wrap:anywhere}.field-detail pre{font:11px/1.8 var(--mono);white-space:pre-wrap;margin:8px 0 0;max-height:220px;overflow:auto}.registry{margin-top:8px}.reference-layout{display:grid;grid-template-columns:1fr 1fr;gap:17px;margin-top:14px}.source-card,.claim-card{border:1px solid var(--line);border-radius:7px;padding:13px;margin-top:10px;min-width:0}.source-card.selected,.claim-card.selected{border-color:var(--teal);box-shadow:0 0 0 1px var(--teal)}.source-card h3,.claim-card h3{font-size:13px}.source-text,.quote-text{font:12px/1.8 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f8fa;border-radius:4px;padding:9px;margin:7px 0}.quote-item{border:1px solid #dce5e9;border-radius:5px;padding:8px;margin-top:8px}.quote-item.selected{border:2px solid var(--teal);background:#edf8f3}.quote-item .quote-text{margin:5px 0 0}.reference-buttons{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.reference-path{padding:11px 13px;border:1px solid #b9d8cd;border-radius:5px;background:#edf7f2;font:12px/1.8 var(--mono);overflow-wrap:anywhere;margin-top:13px}.reference-explanation{font-size:12px;color:var(--muted);margin-top:12px}.missing-list{font-size:12px;color:var(--muted);padding-left:20px}.inspect-empty{font-size:12px;color:var(--muted);border:1px dashed #cbd8df;padding:13px;border-radius:6px;margin-top:10px}.claim-text{font-size:13px;margin-top:7px}.status-badge{display:inline-block;padding:2px 7px;border:1px solid #d2dfe4;border-radius:4px;font:11px var(--mono);color:var(--muted)}
+    @media(max-width:850px){.shell{padding:23px 19px 32px}.step-list{grid-template-columns:repeat(3,minmax(0,1fr))}.columns{gap:12px}.route-body{padding:12px}.learning{grid-template-columns:1fr}.query{font-size:17px}.panel{padding:17px}.definition-grid{grid-template-columns:1fr}.reference-layout{grid-template-columns:1fr}}@media(max-width:600px){.top{flex-direction:column;gap:8px}h1{font-size:23px}.run-row{align-items:stretch;flex-direction:column;gap:10px}.columns{grid-template-columns:1fr}.primary{width:100%}.graph-node{min-width:74px}.shell{padding:18px 13px 28px}.panel{padding:14px}.step-list{grid-template-columns:repeat(2,minmax(0,1fr))}.notice{font-size:11px}.navigator{gap:7px}.secondary{font-size:12px;padding:7px 11px}}
   </style>
 </head>
 <body>
@@ -22,7 +23,8 @@
     <div class="run-row"><button id="run-button" class="primary" type="button" disabled><strong>运行两路零模型对照</strong><small>服务端一次执行 · 本地回放 · 无模型请求</small></button><p id="status" class="status" role="status" aria-live="polite">只读取计划；尚未执行回放。</p></div>
     <p id="error" class="error" role="alert" hidden></p>
   </section>
-  <section class="panel" aria-labelledby="graph-title"><div class="section-head"><h2 id="graph-title">流程图：把执行顺序显式写出来</h2><p class="notice">运行后按 LangGraph 实际编译图的节点与边展示</p></div><div id="diagram" class="diagram" aria-label="LangGraph 编译流程图"><p class="notice">等待本地回放。</p></div><p id="graph-edges" class="graph-edges"></p><p id="graph-plan" class="graph-plan">计划节点将在加载后列出。</p></section>
+  <section class="panel" aria-labelledby="graph-title"><div class="section-head"><h2 id="graph-title">流程图：把执行顺序显式写出来</h2><p class="notice">本地 SVG · 节点和箭头来自 LangGraph 实际编译图 · 无外网绘图</p></div><div id="diagram" class="diagram" aria-label="LangGraph 编译流程图"><p class="notice">等待本地回放。</p></div><div id="graph-legend" class="graph-legend"><span>选中：当前查看</span><span>已查看：位于当前步骤之前</span><span>待查看：位于当前步骤之后</span></div><p class="notice">图中各节点已在服务端执行完。这里的进度仅表示正在查看哪一步；点击节点或按 Enter / 空格切换，不会重新执行。</p><p id="graph-edges" class="graph-edges"></p><p id="graph-plan" class="graph-plan">计划节点将在加载后列出。</p></section>
+  <section id="definitions-panel" class="panel" aria-labelledby="definitions-title"><div class="section-head"><h2 id="definitions-title">定义探查器：从状态回到真实 Python 代码</h2><p id="definitions-status" class="notice">读取后端源码定义中</p></div><div id="definition-tabs" class="definition-tabs" aria-label="选择真实源码定义"></div><p id="definition-explanation" class="definition-note"></p><p id="definition-location" class="definition-location"></p><pre id="definition-code" class="definition-code"></pre><details id="factory-details" class="summary-details"><summary>展开 make_nodes 工厂的完整真实定义</summary><p id="factory-location" class="definition-location"></p><pre id="factory-code" class="definition-code"></pre></details><div class="definition-grid"><div><h3>shared_nodes：名字 → 函数对象</h3><p class="definition-note">它只是普通 Python 字典，不是 LangGraph 内置变量。make_nodes(fixture) 创建一批函数对象；普通执行器和图注册使用同一批。点一个绑定，同时选中对应轨迹和节点源码。</p><div id="node-registry" class="registry"></div></div><div><h3>ReplayState 字段：定义不等于已经有值</h3><p class="definition-note">TypedDict 是类型约定，不自动创建字段，也不提供运行时校验。total=False 允许字段分阶段出现。本例没有累加 reducer：同名字段采用覆盖更新。</p><div id="state-fields" class="field-list"></div><div id="state-field-detail" class="field-detail"></div></div></div></section>
   <section id="results" hidden aria-labelledby="results-title">
     <section class="panel"><div class="section-head"><h2 id="results-title">固定节点函数，观察两种调度</h2><p id="result-counts" class="notice"></p></div><div id="checks" class="checks"></div><p class="notice" style="margin-top:10px">相同结果是本次固定输入对照的结果，不是检索质量或性能测试；普通 Python 也能实现日志、分支和状态管理。</p></section>
     <section class="panel" aria-labelledby="step-title"><div class="section-head"><h2 id="step-title">逐步查看已经执行的轨迹</h2><div class="navigator"><button id="previous-button" class="secondary" type="button" disabled>← 上一步</button><span id="step-count" class="step-count"></span><button id="next-button" class="secondary" type="button" disabled>下一步 →</button></div></div><p class="notice">回放请求已在服务端执行完毕。下方切换只查看保存的 before / update / after，不再执行节点，也不发送模型请求。</p><ol id="step-list" class="step-list"></ol><p id="step-description" class="step-description"></p></section>
@@ -30,6 +32,7 @@
       <section class="route" aria-labelledby="plain-title"><header class="route-head"><h2 id="plain-title">普通 Python · 调用者掌控顺序</h2><p>显式调用函数，再由调用者把返回的 update 合并到 state。</p></header><div class="route-body"><p class="notice">代码示意：同一组节点函数，省略了轨迹记录代码。</p><pre id="plain-code" class="code" aria-label="普通 Python 调度示意"></pre><div id="plain-event"></div></div></section>
       <section class="route graph" aria-labelledby="langgraph-title"><header class="route-head"><h2 id="langgraph-title">LangGraph · 编译图掌控顺序</h2><p>注册节点与边、compile；图运行器沿边调度并合并 update。</p></header><div class="route-body"><p class="notice">代码示意：add_node / add_edge 定义在执行前完成；紫色行为当前运行事件。</p><pre id="graph-code" class="code" aria-label="LangGraph 调度示意"></pre><div id="langgraph-event"></div></div></section>
     </div>
+    <section id="reference-panel" class="panel" aria-labelledby="reference-title"><div class="section-head"><h2 id="reference-title">证据与草稿：点引用，沿编号找到原文</h2><p id="reference-step" class="notice"></p></div><p class="notice">这里只读取当前所选步骤的 after，不偷看后续步骤。此处的点击、切换和高亮均为本地显示，新增请求为 0。</p><div id="reference-path" class="reference-path">第 4 步才会产生 evidence；第 5 步才会产生 draft。</div><div class="reference-layout"><div><h3>evidence · 本轮资料字典</h3><div id="source-cards"></div></div><div><h3>draft · 待校验回答草稿</h3><div id="claim-cards"></div></div></div><p class="reference-explanation">顶层 evidence 是资料字典；draft.claims[i].evidence 是引用数组，两者同名但角色不同。S1 / S2 是本轮来源编号，Q1 是各自来源内部的片段编号，不能当作跨轮永久 ID。text 是整块正文，quotes 是可引用局部；本例每块只有一个段落，所以 Q1 恰好等于 text，并不意味着真实文档总是如此。</p><p id="draft-role" class="reference-explanation">draft → validate → answer：先有草稿，再运行结构和引用定位校验，最后得到已通过技术校验的 answer；即使内容一样，角色不同。技术校验不等于语义支持或事实正确。</p></section>
     <section class="panel" aria-labelledby="answer-title"><div class="section-head"><h2 id="answer-title">共同终点：同一份已校验教学答案</h2><p class="notice">不是新模型回答，也不证明语义正确</p></div><pre id="answer" class="answer"></pre><details class="summary-details"><summary>展开两路最终完整状态</summary><div class="columns"><div><h3>普通 Python</h3><pre id="plain-final"></pre></div><div><h3>LangGraph</h3><pre id="langgraph-final"></pre></div></div></details></section>
   </section>
   <section class="panel" aria-labelledby="learn-title"><h2 id="learn-title">这一步学什么，不学什么？</h2><div class="learning"><div><h3>状态 State</h3><p>问题、候选、证据、草稿与答案集中在共享状态。节点读取已有字段，只返回本步新增或修改的字段。</p></div><div><h3>节点 Node</h3><p>节点本质上仍是 Python 函数。当前检索、重排、生成节点读取合成快照，融合与校验仅在本地计算。</p></div><div><h3>边 Edge</h3><p>普通代码把顺序写在调用语句里；LangGraph 把顺序写成边，编译后交给图运行器执行。本步只是线性图。</p></div></div></section>
@@ -40,9 +43,12 @@
 "use strict";
 // 响应和合成文本一律使用 textContent；不执行模型输出或文档命令。
 const SCHEMA = "rag-workflow-replay/v1";
+const DEFINITION_SCHEMA = "workflow-definitions/v1";
+const SOURCE_FILE = "src/qa_platform/workflows/replay.py";
 const NODE_ORDER = ["retrieve","fuse","rerank","prepare_evidence","generate","validate"];
+const FIELD_ORDER = ["query","bm25","dense","rrf_pool","reranked","evidence","draft","answer"];
 const COUNT_KEYS = ["embedding","http","reranker","chat"];
-const state = {plan:null,data:null,busy:false,step:0,sequence:0};
+const state = {plan:null,data:null,busy:false,step:0,sequence:0,definition:"state",definitionNode:"retrieve",field:"query",reference:null};
 const byId = id => document.getElementById(id);
 function element(tag,className,text){const item=document.createElement(tag);if(className)item.className=className;if(text!==undefined)item.textContent=String(text);return item;}
 function object(value){return value!==null&&typeof value==="object"&&!Array.isArray(value);}
@@ -50,12 +56,28 @@ function requireValue(value,message){if(!value)throw new Error(message);}
 function canonical(value){if(Array.isArray(value))return value.map(canonical);if(object(value))return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])]));return value;}
 function same(left,right){return JSON.stringify(canonical(left))===JSON.stringify(canonical(right));}
 function zeroCounts(counts){return object(counts)&&COUNT_KEYS.every(key=>counts[key]===0);}
+function validateDefinitions(definitions,nodes){
+  if(definitions===undefined)return;
+  requireValue(object(definitions)&&definitions.schema_version===DEFINITION_SCHEMA&&definitions.source_file===SOURCE_FILE&&typeof definitions.notice==="string","源码定义格式或来源不兼容。");
+  const source=(item,name)=>requireValue(object(item)&&item.name===name&&typeof item.code==="string"&&item.code.length>0&&item.code.length<=100000&&Number.isInteger(item.start_line)&&item.start_line>0&&Number.isInteger(item.end_line)&&item.end_line>=item.start_line,"真实源码片段字段不完整。");
+  source(definitions.state,"ReplayState");source(definitions.factory,"make_nodes");source(definitions.setup,"_execute_shared");source(definitions.graph_builder,"build_graph");
+  requireValue(object(definitions.nodes)&&same(Object.keys(definitions.nodes).sort(),[...NODE_ORDER].sort()),"源码节点注册表不完整。");
+  for(const id of NODE_ORDER)source(definitions.nodes[id],id);
+  requireValue(Array.isArray(definitions.state.fields)&&same(definitions.state.fields.map(field=>field.name),FIELD_ORDER),"ReplayState 字段不完整或重复。");
+  for(const field of definitions.state.fields){
+    const reads=nodes.filter(node=>node.reads.includes(field.name)).map(node=>node.id),writes=nodes.filter(node=>node.writes.includes(field.name)).map(node=>node.id);
+    const expectedType=field.name==="query"?"str":["bm25","dense","rrf_pool","reranked"].includes(field.name)?"list[dict]":"dict";
+    requireValue(field.type===expectedType&&field.required===false&&Array.isArray(field.read_by)&&Array.isArray(field.written_by)&&same(field.read_by,reads)&&same(field.written_by,writes),"状态字段类型或读写关系与节点不一致。");
+  }
+  requireValue(nodes.every(node=>[...node.reads,...node.writes].every(name=>FIELD_ORDER.includes(name))),"节点使用了未声明的状态字段。");
+}
 function validateCommon(data){
   requireValue(object(data)&&data.schema_version===SCHEMA,"回放格式版本不兼容，请刷新页面。");
   requireValue(object(data.fixture)&&data.fixture.origin==="synthetic"&&typeof data.fixture.title==="string"&&typeof data.fixture.query==="string","必须是明确标记的教学合成快照。");
   requireValue(zeroCounts(data.request_counts),"回放必须是零模型请求；已停止显示此响应。");
   requireValue(Array.isArray(data.nodes)&&same(data.nodes.map(item=>item.id),NODE_ORDER),"节点顺序不符合本次最小实验。");
   for(const item of data.nodes)requireValue(typeof item.label==="string"&&Array.isArray(item.reads)&&Array.isArray(item.writes)&&[...item.reads,...item.writes].every(key=>typeof key==="string")&&typeof item.operation==="string","节点说明不完整。");
+  validateDefinitions(data.definitions,data.nodes);
 }
 function validatePlan(data){validateCommon(data);requireValue(typeof data.available==="boolean","依赖状态无效。");if(data.available)requireValue(typeof data.langgraph_version==="string","缺少 LangGraph 版本。");return data;}
 function validateReplay(data){
@@ -89,28 +111,94 @@ function renderPlan(plan){
   if(typeof plan.fixture.notice==="string")byId("fixture-notice").textContent=plan.fixture.notice;
   byId("version").textContent=plan.available?"LangGraph "+plan.langgraph_version:"LangGraph 依赖未就绪";
   byId("graph-plan").textContent=plan.nodes.map((item,index)=>`${index+1}. ${item.label}（${item.operation}）`).join(" → ");
+  renderDefinitions();
   if(!plan.available)showError(typeof plan.dependency_message==="string"?plan.dependency_message:"请先安装锁定版本的 LangGraph 依赖。");
 }
+function activeDefinitions(){return (state.data||state.plan)?.definitions;}
+function currentEvent(){return state.data?state.data.langgraph.events[state.step]:null;}
+function sourceCode(target,record){
+  const container=byId(target);container.replaceChildren();
+  record.code.split("\n").forEach((line,index)=>{const row=element("span","source-line");row.append(element("span","source-number",record.start_line+index),element("span","",line));container.append(row);});
+}
+function selectDefinition(key){
+  if(!["state","setup","node","graph_builder"].includes(key))return;
+  state.definition=key;renderDefinitions();
+}
+function selectStateField(name){
+  if(!FIELD_ORDER.includes(name))return;
+  state.field=name;state.definition="state";renderDefinitions();
+}
+function renderDefinitions(){
+  const definitions=activeDefinitions(),tabs=byId("definition-tabs"),registry=byId("node-registry"),fields=byId("state-fields");
+  tabs.replaceChildren();registry.replaceChildren();fields.replaceChildren();
+  if(!definitions){
+    byId("definitions-status").textContent="此响应未提供真实源码定义；请更新后端并刷新。原回放仍可使用。";
+    byId("definition-explanation").textContent="不根据示意代码伪造 ReplayState 或节点定义。";
+    byId("definition-location").textContent="";byId("definition-code").replaceChildren();byId("factory-details").hidden=true;
+    byId("state-field-detail").textContent="等待带源码定义的本地计划。";return;
+  }
+  byId("definitions-status").textContent="后端 inspect 提取真实源码 · 只读文本，不执行代码";byId("factory-details").hidden=false;
+  const labels={state:"ReplayState 定义",setup:"shared_nodes 注册与共用",node:"当前节点函数",graph_builder:"建图代码"};
+  for(const [key,label] of Object.entries(labels)){const button=element("button",state.definition===key?"selected":"",label);button.type="button";button.dataset.definition=key;button.setAttribute("aria-pressed",String(state.definition===key));button.addEventListener("click",()=>selectDefinition(key));tabs.append(button);}
+  const nodeId=state.data?state.data.nodes[state.step].id:state.definitionNode,record=state.definition==="node"?definitions.nodes[nodeId]:definitions[state.definition];
+  const explanations={state:"ReplayState 声明可用字段和类型。total=False 表示这些键可以分阶段存在；真正的值由初始输入及各节点 update 产生。",setup:"shared_nodes = make_nodes(fixture) 只创建一次注册表；_run_plain 与 build_graph(nodes=shared_nodes) 取得相同函数对象。它不是 LangGraph 特殊变量。",node:`当前绑定：shared_nodes["${nodeId}"] → ${definitions.nodes[nodeId].name}。节点读取 state，返回局部更新，不原地修改 state。`,graph_builder:"把同一批函数对象 add_node，再用 add_edge 声明顺序。compile 返回图运行器；下方 SVG 展示的是回放中这个图的实际编译节点与边。"};
+  byId("definition-explanation").textContent=explanations[state.definition];
+  byId("definition-location").textContent=`${definitions.source_file}:${record.start_line}–${record.end_line} · ${record.name}`;sourceCode("definition-code",record);
+  byId("factory-location").textContent=`${definitions.source_file}:${definitions.factory.start_line}–${definitions.factory.end_line}`;sourceCode("factory-code",definitions.factory);
+  for(const id of NODE_ORDER){
+    const button=element("button",id===nodeId?"selected":"",`${id} → ${definitions.nodes[id].name}`);button.type="button";button.dataset.node=id;button.setAttribute("aria-pressed",String(id===nodeId));button.disabled=state.busy;
+    button.addEventListener("click",()=>{if(state.busy)return;state.definition="node";state.definitionNode=id;if(state.data)selectStep(NODE_ORDER.indexOf(id));else renderDefinitions();});registry.append(button);
+  }
+  const event=currentEvent();
+  for(const field of definitions.state.fields){
+    const exists=!!event&&Object.hasOwn(event.after,field.name),fresh=exists&&!Object.hasOwn(event.before,field.name);
+    const button=element("button",state.field===field.name?"selected":"",`${field.name}: ${field.type}`);button.type="button";button.dataset.field=field.name;button.setAttribute("aria-pressed",String(state.field===field.name));
+    button.append(element("small","",event?(fresh?"本步新增":exists?"本步已存在":"此步尚未产生"):"尚未运行 · 只有定义"));button.addEventListener("click",()=>selectStateField(field.name));fields.append(button);
+  }
+  renderStateFields(definitions,event);
+}
+function renderStateFields(definitions=activeDefinitions(),event=currentEvent()){
+  if(!definitions)return;
+  const field=definitions.state.fields.find(item=>item.name===state.field)||definitions.state.fields[0],container=byId("state-field-detail");container.replaceChildren();
+  const exists=!!event&&Object.hasOwn(event.after,field.name),fresh=exists&&!Object.hasOwn(event.before,field.name);
+  container.append(element("strong","",`${field.name}: ${field.type}`),element("p","",`可选键：${field.required?"否":"是（total=False）"} · 读取节点：${field.read_by.join("、")||"无"} · 写入节点：${field.written_by.join("、")||"无；由初始输入提供"}`));
+  container.append(element("p","",event?`${event.node} 的 after：${fresh?"本步新增":exists?"已存在（此前产生或初始输入）":"尚未产生；定义中有这个字段，不表示此时已存值"}`:"尚未执行回放；当前只展示类型定义，不伪造字段值。"));
+  if(exists)container.append(element("pre","",stringify(event.after[field.name])));
+}
+function svgElement(tag,attributes,text){const item=document.createElementNS("http://www.w3.org/2000/svg",tag);for(const [key,value] of Object.entries(attributes||{}))item.setAttribute(key,String(value));if(text!==undefined)item.textContent=String(text);return item;}
 function renderDiagram(){
   const graph=state.data.graph,container=byId("diagram"),lookup=new Map(graph.nodes.map(item=>[item.id,item])),order=["__start__"];
   while(order.at(-1)!=="__end__")order.push(graph.edges.find(edge=>edge.source===order.at(-1)).target);
   container.replaceChildren();
-  for(const [index,id] of order.entries()){
-    if(index)container.append(element("span","arrow","→"));
-    const terminal=id==="__start__"||id==="__end__",item=element(terminal?"span":"button","graph-node"+(terminal?" terminal":""));
-    item.dataset.node=id;const meta=state.data.nodes.find(node=>node.id===id);item.append(element("span","",meta?meta.label:lookup.get(id).label));
-    if(!terminal){item.type="button";item.append(element("small","",id));item.addEventListener("click",()=>selectStep(NODE_ORDER.indexOf(id)));}
-    container.append(item);
+  const vertical=Number(container.clientWidth)>0&&Number(container.clientWidth)<1000;state.graphVertical=vertical;
+  const width=vertical?420:1400,height=vertical?738:148,svg=svgElement("svg",{class:"graph-svg "+(vertical?"vertical":"horizontal"),viewBox:`0 0 ${width} ${height}`,role:"group","aria-label":"由编译节点与边绘制的线性 LangGraph（"+(vertical?"纵向":"横向")+"）"});
+  const defs=svgElement("defs"),marker=svgElement("marker",{id:"workflow-arrow",viewBox:"0 0 10 10",refX:9,refY:5,markerWidth:6,markerHeight:6,orient:"auto-start-reverse"});marker.append(svgElement("path",{d:"M 0 0 L 10 5 L 0 10 z",fill:"#7b8f9e"}));defs.append(marker);svg.append(defs);
+  const positions=new Map();let cursor=15;
+  for(const id of order){
+    const terminal=id==="__start__"||id==="__end__",nodeWidth=vertical?(terminal?116:226):(terminal?76:166),nodeHeight=vertical?(terminal?53:75):87;
+    positions.set(id,{x:vertical?(width-nodeWidth)/2:cursor,y:vertical?cursor:25,width:nodeWidth,height:nodeHeight});cursor+=(vertical?nodeHeight:nodeWidth)+(vertical?22:29);
   }
+  for(const edge of graph.edges){
+    const from=positions.get(edge.source),to=positions.get(edge.target),path=vertical?`M ${from.x+from.width/2} ${from.y+from.height} L ${to.x+to.width/2} ${to.y-4}`:`M ${from.x+from.width} ${from.y+43} L ${to.x-4} ${to.y+43}`;
+    svg.append(svgElement("path",{class:"edge-line",d:path,"marker-end":"url(#workflow-arrow)","data-source":edge.source,"data-target":edge.target}));
+  }
+  for(const id of order){
+    const terminal=id==="__start__"||id==="__end__",position=positions.get(id),item=svgElement("g",{class:"graph-node"+(terminal?" terminal":""),"data-node":id});
+    const meta=state.data.nodes.find(node=>node.id===id),cx=position.x+position.width/2;item.append(svgElement("rect",{...position,rx:8}),svgElement("text",{x:cx,y:position.y+22,"text-anchor":"middle"},meta?meta.label:lookup.get(id).label));
+    if(!terminal){item.setAttribute("role","button");item.setAttribute("tabindex","0");item.setAttribute("aria-label",`${meta.label}，点击查看此步轨迹`);item.append(svgElement("text",{class:"node-id",x:cx,y:position.y+42,"text-anchor":"middle"},id));item.addEventListener("click",()=>selectStep(NODE_ORDER.indexOf(id)));item.addEventListener("keydown",event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();selectStep(NODE_ORDER.indexOf(id));}});}
+    item.append(svgElement("text",{class:"node-status",x:cx,y:position.y+(vertical?(terminal?41:63):67),"text-anchor":"middle"},terminal?"起止节点":"待查看"));svg.append(item);
+  }
+  container.append(svg);
   byId("graph-edges").textContent="编译边："+graph.edges.map(edge=>`${edge.source} → ${edge.target}`).join(" · ");
 }
 function codeLine(container,text,active=false,current=false){container.append(element("span","code-line"+(active?" active":"")+(current?" current":""),text));}
 function renderCode(nodeId){
   const plain=byId("plain-code"),graph=byId("graph-code");plain.replaceChildren();graph.replaceChildren();
+  codeLine(plain,"# retrieve / fuse 等名字指向 shared_nodes 中的函数");
   codeLine(plain,"state = {\"query\": snapshot.query}");
   for(const id of NODE_ORDER)codeLine(plain,`state.update(${id}(state))`,id===nodeId);
   codeLine(plain,"# 顺序与合并由调用者逐句执行");
-  codeLine(graph,"builder = StateGraph(ReplayState)");codeLine(graph,"for name, fn in shared_nodes:");codeLine(graph,"    builder.add_node(name, fn)");
+  codeLine(graph,"shared_nodes = make_nodes(fixture)");codeLine(graph,"builder = StateGraph(ReplayState)");codeLine(graph,"for name, fn in shared_nodes.items():");codeLine(graph,"    builder.add_node(name, fn)");
   codeLine(graph,"# 按上方编译图注册相邻边");codeLine(graph,"for source, target in edges:");codeLine(graph,"    builder.add_edge(source, target)");codeLine(graph,"app = builder.compile()");
   codeLine(graph,"for kind, event in app.stream(initial_state,",false,true);codeLine(graph,"              stream_mode=[\"updates\", \"values\"]):",false,true);
   codeLine(graph,`    # 本次事件：${nodeId}`,false,true);
@@ -121,14 +209,72 @@ function renderEvent(target,event){
     const box=element("details","phase"+(key==="update"?" update":""));box.open=key!=="before";box.append(element("summary","",label),element("pre","",stringify(event[key])));container.append(box);
   }
 }
+function selectReference(sourceId,quoteId,claimIndex=null,referenceIndex=null){
+  const evidence=currentEvent()?.after.evidence;
+  if(!object(evidence)||!object(evidence[sourceId])||!object(evidence[sourceId].quotes)||typeof evidence[sourceId].quotes[quoteId]!=="string"){
+    byId("reference-path").textContent=`引用无法定位：evidence.${String(sourceId)}.quotes.${String(quoteId)} 不存在；未伪造原文。`;return;
+  }
+  state.reference={source_id:sourceId,quote_id:quoteId,claim_index:claimIndex,reference_index:referenceIndex};renderReferenceInspector();
+}
+function renderReferenceInspector(){
+  const event=currentEvent(),sources=byId("source-cards"),claims=byId("claim-cards");sources.replaceChildren();claims.replaceChildren();
+  if(!event){byId("reference-step").textContent="尚未回放";byId("reference-path").textContent="尚无状态，不展示未来证据或草稿。";return;}
+  byId("reference-step").textContent=`当前查看：第 ${state.step+1} 步 ${event.node} 的 after`;
+  const evidence=object(event.after.evidence)?event.after.evidence:null,draft=object(event.after.draft)?event.after.draft:null;
+  if(!evidence){sources.append(element("p","inspect-empty","此步 evidence 尚未产生。请查看第 4 步 prepare_evidence；不从最终状态预先拿资料。"));state.reference=null;}
+  if(!draft)claims.append(element("p","inspect-empty","此步 draft 尚未产生。第 5 步 generate 才写入草稿；当前没有 claims 或引用数组。"));
+  if(evidence){
+    const selected=state.reference;if(selected&&(!object(evidence[selected.source_id])||typeof evidence[selected.source_id].quotes?.[selected.quote_id]!=="string"))state.reference=null;
+    if(!state.reference){
+      const firstClaim=Array.isArray(draft?.claims)?draft.claims.findIndex(claim=>object(claim)&&Array.isArray(claim.evidence)&&claim.evidence.some(ref=>object(ref)&&object(evidence[ref.source_id])&&typeof evidence[ref.source_id].quotes?.[ref.quote_id]==="string")):-1;
+      if(firstClaim>=0){const refIndex=draft.claims[firstClaim].evidence.findIndex(ref=>object(ref)&&object(evidence[ref.source_id])&&typeof evidence[ref.source_id].quotes?.[ref.quote_id]==="string"),ref=draft.claims[firstClaim].evidence[refIndex];state.reference={...ref,claim_index:firstClaim,reference_index:refIndex};}
+      else {const sourceId=Object.keys(evidence).find(id=>object(evidence[id])&&object(evidence[id].quotes)&&Object.keys(evidence[id].quotes).length);if(sourceId)state.reference={source_id:sourceId,quote_id:Object.keys(evidence[sourceId].quotes)[0],claim_index:null,reference_index:null};}
+    }
+    for(const [sourceId,source] of Object.entries(evidence)){
+      if(!object(source)||typeof source.text!=="string"||!object(source.quotes)){sources.append(element("p","inspect-empty",`${sourceId} 的资料结构不完整；未补造正文。`));continue;}
+      const selected=state.reference?.source_id===sourceId,card=element("article","source-card"+(selected?" selected":""));card.dataset.source=sourceId;
+      card.append(element("h3","",`${sourceId} · ${typeof source.chunk_id==="string"?source.chunk_id:"缺少 chunk_id"}`),element("p","notice",`chunk_id 是块身份；${sourceId} 是本轮资料编号。`));
+      const original=element("pre","source-text"),quote=selected?source.quotes[state.reference.quote_id]:null,at=typeof quote==="string"?source.text.indexOf(quote):-1;
+      if(at>=0){original.append(element("span","",source.text.slice(0,at)),element("mark","",quote),element("span","",source.text.slice(at+quote.length)));}else original.textContent=source.text;
+      const originalDetails=element("details","summary-details");originalDetails.open=selected;originalDetails.append(element("summary","","text · 整块原文（选中引用处高亮）"),original);card.append(originalDetails);
+      for(const [quoteId,text] of Object.entries(source.quotes)){
+        if(typeof text!=="string")continue;
+        const selectedQuote=selected&&state.reference.quote_id===quoteId,box=element("div","quote-item"+(selectedQuote?" selected":"")),button=element("button","reference-button"+(selectedQuote?" selected":""),`${sourceId}/${quoteId}`);button.type="button";button.dataset.source=sourceId;button.dataset.quote=quoteId;button.setAttribute("aria-pressed",String(selectedQuote));button.addEventListener("click",()=>selectReference(sourceId,quoteId));box.append(button,element("pre","quote-text",text));card.append(box);
+      }
+      sources.append(card);
+    }
+  }
+  if(draft){
+    const meanings={partial:"部分回答：证据只覆盖问题的一部分",answered:"已回答：仍待校验和人工核验",insufficient_evidence:"证据不足"};
+    claims.append(element("p","status-badge",`draft.status = ${typeof draft.status==="string"?draft.status:"缺失"}`),element("p","definition-note",meanings[draft.status]||"状态值未识别，不根据未知值推断回答完成。"));
+    if(Array.isArray(draft.claims))draft.claims.forEach((claim,index)=>{
+      if(!object(claim))return;
+      const references=Array.isArray(claim.evidence)?claim.evidence:[],selected=references.some(ref=>object(ref)&&ref.source_id===state.reference?.source_id&&ref.quote_id===state.reference?.quote_id),card=element("article","claim-card"+(selected?" selected":""));card.dataset.claim=String(index);card.append(element("h3","",`claims[${index}] · 回答要点 ${index+1}`),element("p","claim-text",typeof claim.text==="string"?claim.text:"缺少要点文本"));
+      const buttons=element("div","reference-buttons");references.forEach((ref,refIndex)=>{
+        if(!object(ref))return;
+        const active=ref.source_id===state.reference?.source_id&&ref.quote_id===state.reference?.quote_id,button=element("button","reference-button"+(active?" selected":""),`${ref.source_id}/${ref.quote_id}`);button.type="button";button.dataset.claim=String(index);button.dataset.reference=String(refIndex);button.setAttribute("aria-pressed",String(active));button.addEventListener("click",()=>selectReference(ref.source_id,ref.quote_id,index,refIndex));buttons.append(button);
+      });card.append(buttons);claims.append(card);
+    });
+    const missing=element("div","reference-explanation");missing.append(element("h3","","missing_info · 仍缺少的信息"));
+    if(Array.isArray(draft.missing_info)&&draft.missing_info.length){const list=element("ul","missing-list");for(const text of draft.missing_info)list.append(element("li","",typeof text==="string"?text:"非文本条目"));missing.append(list);}else missing.append(element("p","notice","本草稿没有列出 missing_info。"));claims.append(missing);
+  }
+  const selection=state.reference;
+  if(!evidence)byId("reference-path").textContent="当前 after 尚无 evidence，也尚无 draft：字段必须由前序节点真正写入。";
+  else if(!selection)byId("reference-path").textContent="当前资料中没有可选择的引用片段。";
+  else {
+    const matching=[];if(Array.isArray(draft?.claims))draft.claims.forEach((claim,index)=>{if(object(claim)&&Array.isArray(claim.evidence))claim.evidence.forEach((ref,refIndex)=>{if(object(ref)&&ref.source_id===selection.source_id&&ref.quote_id===selection.quote_id)matching.push(`draft.claims[${index}].evidence[${refIndex}]`);});});
+    byId("reference-path").textContent=`${matching.length?matching.join(" / ")+" → ":"当前尚无草稿引用 → "}evidence.${selection.source_id}.quotes.${selection.quote_id}`;
+  }
+  byId("draft-role").textContent=Object.hasOwn(event.after,"answer")?"当前已到 validate：answer 已产生。draft 保留原草稿，answer 是校验函数返回的结果；两者内容即使相同，产生阶段和角色也不同。已验证结构、状态和引用定位，不等于语义支持或事实正确。":"draft → validate → answer：草稿还不是已校验回答。validate 才检查结构、状态和引用定位并写入 answer；内容即使相同，角色也不同。技术校验不等于语义支持或事实正确。";
+}
 function selectStep(index){
   if(state.busy||!state.data||!Number.isInteger(index)||index<0||index>=state.data.nodes.length)return;
-  state.step=index;const meta=state.data.nodes[index],left=state.data.plain.events[index],right=state.data.langgraph.events[index];
+  state.step=index;const meta=state.data.nodes[index],left=state.data.plain.events[index],right=state.data.langgraph.events[index];state.definitionNode=meta.id;
   byId("step-count").textContent=`${index+1} / ${state.data.nodes.length}`;
   byId("step-description").textContent=`${meta.label} · ${meta.operation} ｜读取：${meta.reads.join("、")||"无"} ｜写入：${meta.writes.join("、")||"无"}`;
   for(const button of byId("step-list").querySelectorAll("button")){const selected=Number(button.dataset.step)===index;button.classList.toggle("selected",selected);button.setAttribute("aria-pressed",String(selected));}
-  for(const item of byId("diagram").querySelectorAll(".graph-node")){const selected=item.dataset.node===meta.id;item.classList.toggle("selected",selected);if(item.tagName==="BUTTON")item.setAttribute("aria-pressed",String(selected));}
-  renderCode(meta.id);renderEvent("plain-event",left);renderEvent("langgraph-event",right);updateNavigation();
+  for(const item of byId("diagram").querySelectorAll(".graph-node")){const nodeIndex=NODE_ORDER.indexOf(item.dataset.node),selected=nodeIndex===index;item.classList.toggle("selected",selected);item.classList.toggle("viewed",nodeIndex>=0&&nodeIndex<index);if(nodeIndex>=0){item.setAttribute("aria-pressed",String(selected));const label=item.querySelector(".node-status");if(label)label.textContent=selected?"当前查看":nodeIndex<index?"已查看（均已执行）":"待查看（均已执行）";}}
+  renderCode(meta.id);renderEvent("plain-event",left);renderEvent("langgraph-event",right);renderDefinitions();renderReferenceInspector();updateNavigation();
 }
 function renderReplay(data){
   state.data=data;state.step=0;renderDiagram();byId("results").hidden=false;
@@ -152,7 +298,7 @@ async function loadPlan(){
 }
 async function runReplay(){
   if(state.busy||!state.plan||!state.plan.available)return;
-  const sequence=++state.sequence;state.data=null;byId("results").hidden=true;byId("error").hidden=true;byId("diagram").replaceChildren(element("p","notice","正在执行本地回放…"));byId("graph-edges").textContent="";setBusy(true);setStatus("两路正在服务端使用同一份合成快照执行；不调用模型。");
+  const sequence=++state.sequence;state.data=null;state.reference=null;byId("results").hidden=true;byId("error").hidden=true;byId("diagram").replaceChildren(element("p","notice","正在执行本地回放…"));byId("graph-edges").textContent="";setBusy(true);renderDefinitions();setStatus("两路正在服务端使用同一份合成快照执行；不调用模型。");
   try{
     const response=await fetch("/api/workflow/replay",{method:"POST",mode:"same-origin",credentials:"same-origin",cache:"no-store",headers:{"Content-Type":"application/json","X-Retrieval-Lab":"1"},body:"{}"});
     if(sequence!==state.sequence)return;
@@ -163,6 +309,14 @@ async function runReplay(){
 byId("run-button").addEventListener("click",runReplay);
 byId("previous-button").addEventListener("click",()=>selectStep(state.step-1));
 byId("next-button").addEventListener("click",()=>selectStep(state.step+1));
+function refreshDiagramLayout(){
+  const width=Number(byId("diagram").clientWidth);
+  if(!state.data||state.busy||!(width>0)||state.graphVertical===(width<1000))return;
+  renderDiagram();selectStep(state.step);
+}
+if(typeof ResizeObserver==="function"){
+  const observer=new ResizeObserver(refreshDiagramLayout);observer.observe(byId("diagram"));
+}
 loadPlan();
 </script>
 </body>

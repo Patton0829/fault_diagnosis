@@ -3,9 +3,11 @@
 from copy import deepcopy
 from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import files
+import inspect
 import json
 from math import isfinite
-from typing import TypedDict
+from textwrap import dedent
+from typing import TypedDict, get_origin
 
 from langchain_core.documents import Document
 from langsmith import tracing_context
@@ -67,6 +69,7 @@ def describe() -> dict:
         "schema_version": SCHEMA, "available": installed is not None,
         "langgraph_version": installed, "fixture": _fixture_info(load_fixture()),
         "nodes": deepcopy(NODES), "request_counts": dict(ZERO_REQUESTS), "notice": NOTICE,
+        "definitions": describe_definitions(),
         "dependency_message": (
             f"本步验证版本为LangGraph {VALIDATED_VERSION}；当前缺少依赖，请先安装项目workflow可选依赖，不会伪装成图执行。"
             if installed is None else f"本步验证版本为LangGraph {VALIDATED_VERSION}；读取计划本身不会安装或升级包。"
@@ -214,18 +217,71 @@ def run_langgraph(fixture: dict) -> dict:
         return _run_langgraph(fixture, build_graph(fixture))
 
 
+def _execute_shared(fixture: dict):
+    """shared_nodes是普通字典：名字映射到函数对象，两路使用同一批函数。"""
+    shared_nodes = make_nodes(fixture)
+    plain = _run_plain(fixture, shared_nodes)
+    graph = build_graph(fixture, nodes=shared_nodes)
+    graphed = _run_langgraph(fixture, graph)
+    return plain, graph, graphed, shared_nodes
+
+
+def _source_record(obj) -> dict:
+    """只展示本模块已知定义；没有浏览器可指定的文件路径或代码执行入口。"""
+    obj = inspect.unwrap(obj)
+    if getattr(obj, "__module__", None) != __name__ or inspect.getsourcefile(obj) != inspect.getsourcefile(ReplayState):
+        raise ValueError("只能展示本回放模块的源码定义")
+    lines, start_line = inspect.getsourcelines(obj)
+    return {
+        "name": obj.__name__, "code": dedent("".join(lines)).rstrip("\n"),
+        "start_line": start_line, "end_line": start_line + len(lines) - 1,
+    }
+
+
+def describe_definitions(fixture: dict | None = None, nodes: dict | None = None) -> dict:
+    """提取实际类型和源码文本，不执行节点、建图、检索或生成回答。"""
+    shared_nodes = nodes if nodes is not None else make_nodes(fixture if fixture is not None else load_fixture())
+    if list(shared_nodes) != [row["id"] for row in NODES]:
+        raise ValueError("节点注册表与教学顺序不一致")
+    node_sources = {node_id: _source_record(function) for node_id, function in shared_nodes.items()}
+    if any(source["name"] != node_id for node_id, source in node_sources.items()):
+        raise ValueError("本教学注册名称与对应函数不一致")
+    state = _source_record(ReplayState)
+    state["fields"] = [{
+        "name": name,
+        "type": str(annotation) if get_origin(annotation) is not None else getattr(annotation, "__name__", str(annotation)),
+        "required": name in ReplayState.__required_keys__,
+        "read_by": [row["id"] for row in NODES if name in row["reads"]],
+        "written_by": [row["id"] for row in NODES if name in row["writes"]],
+    } for name, annotation in ReplayState.__annotations__.items()]
+    return {
+        "schema_version": "workflow-definitions/v1",
+        "source_file": "src/qa_platform/workflows/replay.py",
+        "state": state, "factory": _source_record(make_nodes),
+        "setup": _source_record(_execute_shared),
+        "nodes": node_sources,
+        "graph_builder": _source_record(build_graph),
+        "notice": (
+            "这里展示本模块真实定义的只读源码，不是可执行编辑器，不接受任意文件路径。"
+            "ReplayState是TypedDict类型约定，不自动创建字段，也不做运行时数据校验；"
+            "total=False允许各字段分阶段出现，不代表节点可以缺少自己需要的字段。"
+            "shared_nodes只是名字到函数对象的Python字典，由make_nodes创建，不是LangGraph内置变量。"
+            "当前节点读写说明来自教学声明，实际值仍以所选步骤轨迹为准。"
+        ),
+    }
+
+
 def compare_replay() -> dict:
     fixture = load_fixture()
     # 禁用自动LangSmith tracing，即使用户环境中已开启，也不外发合成或未来接入的数据。
     with tracing_context(enabled=False):
-        nodes = make_nodes(fixture)
-        plain = _run_plain(fixture, nodes)
-        graph = build_graph(fixture, nodes=nodes)
-        graphed = _run_langgraph(fixture, graph)
+        plain, graph, graphed, shared_nodes = _execute_shared(fixture)
         structure = graph.get_graph()
+        definitions = describe_definitions(fixture, shared_nodes)
     return {
         "schema_version": SCHEMA, "fixture": _fixture_info(fixture), "nodes": deepcopy(NODES),
         "langgraph_version": version("langgraph"),
+        "definitions": definitions,
         "graph": {"nodes": [{"id": key, "label": value.name} for key, value in structure.nodes.items()],
                   "edges": [{"source": edge.source, "target": edge.target} for edge in structure.edges]},
         "plain": plain, "langgraph": graphed,

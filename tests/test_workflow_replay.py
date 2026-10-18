@@ -8,13 +8,16 @@ import builtins
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import deepcopy
+from functools import wraps
 from importlib.metadata import PackageNotFoundError
+import inspect
 import io
 import json
 from pathlib import Path
 import socket
 import sys
 from threading import Event
+from textwrap import dedent
 from types import ModuleType
 from unittest.mock import Mock
 
@@ -232,6 +235,7 @@ def test_compare_calls_each_same_node_function_twice(monkeypatch):
         nodes = original_make(fixture)
         observed = {}
         for name, function in nodes.items():
+            @wraps(function)
             def observed_node(state, _name=name, _function=function):
                 calls.append((_name, deepcopy(state)))
                 return _function(state)
@@ -239,12 +243,190 @@ def test_compare_calls_each_same_node_function_twice(monkeypatch):
         return observed
 
     make_spy = Mock(side_effect=observed_make)
+    make_spy.__wrapped__ = original_make
     monkeypatch.setattr(replay, "make_nodes", make_spy)
     result = replay.compare_replay()
     assert make_spy.call_count == 1
     assert [name for name, _ in calls] == NODE_IDS * 2
     assert calls[:6] == calls[6:]
     assert result["comparison"]["same_updates"] is True
+
+
+def assert_source_record(entry, function):
+    function = inspect.unwrap(function)
+    lines, start = inspect.getsourcelines(function)
+    assert entry == {
+        "name": function.__name__,
+        "code": dedent("".join(lines)).rstrip("\n"),
+        "start_line": start,
+        "end_line": start + len(lines) - 1,
+    }
+    source = Path(inspect.getsourcefile(replay.ReplayState)).read_text(encoding="utf-8").splitlines(keepends=True)
+    assert entry["code"] == dedent("".join(source[start - 1:entry["end_line"]])).rstrip("\n")
+
+
+def test_definitions_report_actual_state_factory_shared_setup_and_graph_source():
+    definitions = replay.describe_definitions()
+    assert definitions["schema_version"] == "workflow-definitions/v1"
+    assert definitions["source_file"] == "src/qa_platform/workflows/replay.py"
+    state = dict(definitions["state"])
+    state.pop("fields")
+    assert_source_record(state, replay.ReplayState)
+    assert_source_record(definitions["factory"], replay.make_nodes)
+    assert_source_record(definitions["setup"], replay._execute_shared)
+    assert_source_record(definitions["graph_builder"], replay.build_graph)
+    assert "shared_nodes = make_nodes(fixture)" in definitions["setup"]["code"]
+    assert "nodes=shared_nodes" in definitions["setup"]["code"]
+    for term in ("TypedDict", "total=False", "Python字典", "不接受任意文件路径"):
+        assert term in definitions["notice"]
+    # This contract exposes selected definitions, never a dump of the whole module.
+    assert "def load_fixture(" not in definitions["factory"]["code"]
+    assert "def describe_definitions(" not in definitions["graph_builder"]["code"]
+    assert "module_source" not in definitions and "source" not in definitions
+
+
+def test_definitions_state_fields_exactly_match_types_and_declared_read_write_edges():
+    fields = replay.describe_definitions()["state"]["fields"]
+    assert [row["name"] for row in fields] == [
+        "query", "bm25", "dense", "rrf_pool", "reranked", "evidence", "draft", "answer",
+    ]
+    expected_types = {
+        "query": "str", "bm25": "list[dict]", "dense": "list[dict]", "rrf_pool": "list[dict]",
+        "reranked": "list[dict]", "evidence": "dict", "draft": "dict", "answer": "dict",
+    }
+    assert replay.ReplayState.__total__ is False
+    assert replay.ReplayState.__required_keys__ == frozenset()
+    assert replay.ReplayState.__optional_keys__ == frozenset(expected_types)
+    for field in fields:
+        name = field["name"]
+        assert field == {
+            "name": name, "type": expected_types[name], "required": False,
+            "read_by": [row["id"] for row in replay.NODES if name in row["reads"]],
+            "written_by": [row["id"] for row in replay.NODES if name in row["writes"]],
+        }
+    assert fields[0]["read_by"] == ["retrieve"]
+    assert fields[0]["written_by"] == []  # Initial input, not a synthetic writer node.
+    assert fields[-1]["read_by"] == []
+
+
+@pytest.mark.parametrize("node_id", NODE_IDS)
+def test_definitions_node_code_is_the_actual_registered_closure(node_id):
+    fixture = replay.load_fixture()
+    nodes = replay.make_nodes(fixture)
+    definitions = replay.describe_definitions(fixture, nodes)
+    assert list(definitions["nodes"]) == NODE_IDS
+    assert nodes[node_id].__name__ == node_id
+    assert_source_record(definitions["nodes"][node_id], nodes[node_id])
+
+
+def test_plan_extracts_source_without_running_nodes_graph_or_sdk(monkeypatch):
+    original_make = replay.make_nodes
+    forbidden = Mock(side_effect=AssertionError("Metadata must not run graph, nodes or provider SDK"))
+
+    def observed_make(fixture):
+        nodes = original_make(fixture)
+        observed = {}
+        for name, function in nodes.items():
+            @wraps(function)
+            def no_execution(*args, **kwargs):
+                return forbidden(*args, **kwargs)
+            observed[name] = no_execution
+        return observed
+
+    make_spy = Mock(side_effect=observed_make)
+    make_spy.__wrapped__ = original_make
+    monkeypatch.setattr(replay, "make_nodes", make_spy)
+    for name in ("build_graph", "_execute_shared", "_run_plain", "_run_langgraph"):
+        wrapped = Mock(side_effect=forbidden)
+        wrapped.__wrapped__ = getattr(replay, name)
+        monkeypatch.setattr(replay, name, wrapped)
+    plan = replay.describe()
+    assert plan["definitions"]["nodes"]["retrieve"]["name"] == "retrieve"
+    assert plan["request_counts"] == ZERO_REQUESTS
+    assert make_spy.call_count == 1
+    forbidden.assert_not_called()
+
+
+def test_shared_execution_passes_the_same_registry_object_to_plain_and_graph(monkeypatch):
+    original_plain, original_graph = replay._run_plain, replay.build_graph
+    registries = []
+
+    @wraps(original_plain)
+    def observed_plain(fixture, nodes):
+        registries.append(nodes)
+        return original_plain(fixture, nodes)
+
+    @wraps(original_graph)
+    def observed_graph(fixture, *, nodes=None):
+        registries.append(nodes)
+        return original_graph(fixture, nodes=nodes)
+
+    monkeypatch.setattr(replay, "_run_plain", observed_plain)
+    monkeypatch.setattr(replay, "build_graph", observed_graph)
+    result = replay.compare_replay()
+    assert len(registries) == 2
+    assert registries[0] is registries[1]
+    assert all(callable(function) for function in registries[0].values())
+    assert result["definitions"] == replay.describe_definitions(nodes=registries[0])
+    assert result["plain"]["events"] == result["langgraph"]["events"]
+    assert result["request_counts"] == ZERO_REQUESTS
+
+
+def test_describing_definitions_keeps_fixture_nodes_and_future_results_independent():
+    fixture = replay.load_fixture()
+    before = deepcopy(fixture)
+    nodes = replay.make_nodes(fixture)
+    definitions = replay.describe_definitions(fixture, nodes)
+    definitions["state"]["fields"][0]["read_by"].append("invented")
+    definitions["nodes"]["retrieve"]["code"] = "not actual source"
+    assert fixture == before
+    fresh = replay.describe_definitions(fixture, nodes)
+    assert fresh["state"]["fields"][0]["read_by"] == ["retrieve"]
+    assert_source_record(fresh["nodes"]["retrieve"], nodes["retrieve"])
+    assert replay.compare_replay()["comparison"]["same_answer"] is True
+
+
+@pytest.mark.parametrize("target", [Path, json.loads, lambda: "external definition", "/tmp/private.py"])
+def test_source_extraction_rejects_external_objects_and_arbitrary_paths(target):
+    with pytest.raises(ValueError, match="本回放模块"):
+        replay._source_record(target)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "reordered", "extra"])
+def test_definitions_reject_registry_drift_without_execution(mutation):
+    nodes = replay.make_nodes(replay.load_fixture())
+    if mutation == "missing":
+        nodes.pop("validate")
+    elif mutation == "reordered":
+        nodes = dict(reversed(list(nodes.items())))
+    else:
+        nodes["external"] = lambda state: {}
+    with pytest.raises(ValueError, match="节点注册表"):
+        replay.describe_definitions(nodes=nodes)
+
+
+def test_definitions_reject_swapped_functions_even_when_registry_names_are_correct():
+    nodes = replay.make_nodes(replay.load_fixture())
+    nodes["retrieve"], nodes["fuse"] = nodes["fuse"], nodes["retrieve"]
+    assert list(nodes) == NODE_IDS
+    with pytest.raises(ValueError, match="注册名称与对应函数不一致"):
+        replay.describe_definitions(nodes=nodes)
+
+
+def test_definitions_do_not_accept_a_browser_supplied_source_path():
+    with pytest.raises(TypeError):
+        replay.describe_definitions(path="/tmp/private.py")
+
+
+def test_plan_and_replay_api_include_the_same_actual_definitions_without_new_io(client):
+    plan = client.get("/api/workflow/plan")
+    assert plan.status_code == 200
+    result = client.post("/api/workflow/replay", headers=HEADERS, json={})
+    assert result.status_code == 200
+    assert plan.json()["definitions"] == result.json()["definitions"] == replay.describe_definitions()
+    assert plan.json()["request_counts"] == result.json()["request_counts"] == ZERO_REQUESTS
+    assert_route(result.json()["plain"], replay.load_fixture()["query"])
+    assert_route(result.json()["langgraph"], replay.load_fixture()["query"])
 
 
 @pytest.mark.parametrize("runner", [replay.run_plain, replay.run_langgraph])
