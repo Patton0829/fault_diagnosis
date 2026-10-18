@@ -5,6 +5,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 from threading import Lock
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
@@ -23,6 +24,7 @@ DEFAULT_INDEX = DATA_DIR / "milvus_indexes" / "kubernetes_zh_v1"
 PAGE = PROJECT_ROOT / "web" / "retrieval_lab.html"
 EXPORT_SCRIPT = PROJECT_ROOT / "web" / "retrieval_export.js"
 WORKFLOW_PAGE = PROJECT_ROOT / "web" / "workflow_lab.html"
+BRANCHING_PAGE = PROJECT_ROOT / "web" / "branching_lab.html"
 
 
 class ComparisonRequest(BaseModel):
@@ -44,6 +46,13 @@ class ReplayRequest(BaseModel):
     """最小回放只接受空对象；不允许把路径、正文或服务地址交给后端。"""
 
     model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class BranchReplayRequest(BaseModel):
+    """只选择固定教学场景，不接受任意快照或问题。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    scenario: Literal["with_evidence", "empty_evidence"]
 
 
 def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
@@ -87,6 +96,16 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
     def workflow_plan():
         # 独立教学页不要求当前Milvus索引或真实问答快照已经就绪。
         from qa_platform.workflows.replay import describe
+
+        return describe()
+
+    @app.get("/workflow/branching")
+    def branching_page():
+        return FileResponse(BRANCHING_PAGE)
+
+    @app.get("/api/workflow/branching/plan")
+    def branching_plan():
+        from qa_platform.workflows.branching import describe
 
         return describe()
 
@@ -134,6 +153,25 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
         except Exception as exc:
             print(f"[工作流回放未完成] {type(exc).__name__}；未调用模型。", flush=True)
             raise HTTPException(503, "本地回放未完成，请检查LangGraph依赖或合成快照；未调用模型、未自动重试。") from None
+        finally:
+            busy.release()
+
+    @app.post("/api/workflow/branching/replay")
+    async def branching_replay(request: Request):
+        payload = await read_payload(
+            request, BranchReplayRequest,
+            "只接受固定scenario：with_evidence或empty_evidence；不接受问题、路径、正文或模型参数。",
+        )
+        if not busy.acquire(blocking=False):
+            raise HTTPException(409, "当前有操作正在执行；未开始条件回放，也不会请求模型。")
+        try:
+            from qa_platform.workflows.branching import compare_replay
+
+            # 与原线性课件一样，不接管或清除真实检索snapshot。
+            return await run_in_threadpool(compare_replay, payload.scenario)
+        except Exception as exc:
+            print(f"[条件回放未完成] {type(exc).__name__}；未调用模型。", flush=True)
+            raise HTTPException(503, "本地条件回放未完成；未调用模型、未自动重试，也未把异常当作正常拒答。") from None
         finally:
             busy.release()
 
