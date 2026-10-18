@@ -246,6 +246,9 @@ def test_hybrid_encodes_once_reuses_common_scope_and_closes_client(tmp_path):
     assert len(result["routes"]["rrf"]) == 5
     union = {hit["chunk_id"] for route in result["routes"].values() for hit in route}
     assert set(result["records"]) == union
+    assert {hit["chunk_id"] for hit in result["rrf_pool"]} == union
+    assert len(result["rrf_pool"]) > len(result["routes"]["rrf"])
+    assert result["rrf_pool"][:5] == result["routes"]["rrf"]
     assert "synthetic-9" not in result["records"]
 
 
@@ -399,7 +402,12 @@ def test_api_success_trims_query_and_runs_the_selected_mode_once(api, mode):
     client, prepare, compare, check = api
     response = client.post("/api/compare", headers=HEADERS, json={"query": "  DNS  ", "mode": mode})
     assert response.status_code == 200
-    assert response.json() == compare.return_value
+    result = response.json()
+    if mode == "hybrid":
+        # 混合检索完成后绑定服务端快照；客户端只凭token请求原候选重排。
+        token = result.pop("experiment_id")
+        assert len(token) == 32 and all(char in "0123456789abcdef" for char in token)
+    assert result == compare.return_value
     prepare.assert_called_once_with(check["index_dir"], "DNS")
     compare.assert_called_once_with(check, mode)
 

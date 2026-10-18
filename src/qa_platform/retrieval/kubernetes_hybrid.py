@@ -75,7 +75,7 @@ def compare(
         }
         for rank, (doc, score, matched) in enumerate(lexical, 1)
     ]
-    dense_hits, fused_hits = [], []
+    dense_hits, fused_hits, fused_pool = [], [], []
     counts = {"embedding": 0, "http": 0, "reranker": 0, "chat": 0}
     if mode == "hybrid":
         import numpy as np
@@ -116,9 +116,11 @@ def compare(
                 "dense": [by_id[hit["chunk_id"]] for hit in dense],
             },
             rank_constant=RRF_CONSTANT,
-            top_k=TOP_K,
+            # 保留完整召回并集，显示前5与后续重排使用同一批候选。
+            # 不能在重排前截掉单路候选，否则重排也无法将其找回。
+            top_k=len(documents),
         )
-        fused_hits = [
+        fused_pool = [
             {
                 "chunk_id": hit.document.metadata["chunk_id"],
                 "rank": rank,
@@ -128,6 +130,7 @@ def compare(
             }
             for rank, hit in enumerate(fused, 1)
         ]
+        fused_hits = fused_pool[:TOP_K]
     require(
         all(isfinite(hit["score"]) for hit in bm25_hits + dense_hits + fused_hits),
         "候选含非有限分数",
@@ -144,6 +147,7 @@ def compare(
         "request_counts": counts,
         # 保留每路全部8条的名次，前端先展示5条，可显式展开其余候选。
         "routes": {"bm25": bm25_hits, "dense": dense_hits, "rrf": fused_hits},
+        "rrf_pool": fused_pool,
         "records": {
             row["chunk_id"]: {"text": row["text"], "metadata": row["metadata"]}
             for row in records

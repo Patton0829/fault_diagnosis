@@ -13,6 +13,7 @@
   <style>
     .more-candidates{border-top:1px solid var(--line)}.more-candidates summary{padding:10px 14px;color:var(--teal);font-size:12px;cursor:pointer}.more-candidates[open] summary{border-bottom:1px solid #edf2f5}
     .result-tools{margin-top:16px;padding:14px 18px;background:var(--paper);border:1px solid var(--line);border-radius:9px}.share-row{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}.share-title{font-size:14px;font-weight:600}.export-actions{display:flex;gap:9px;flex-wrap:wrap}.utility{padding:8px 13px;border:1px solid #b8cbd1;border-radius:6px;background:white;color:var(--teal);font-size:13px}.utility:hover:not(:disabled){background:var(--soft)}.share-notice{font-size:12px;color:var(--muted);margin-top:7px}.manual-copy{margin-top:12px}.manual-copy label{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}.manual-copy textarea{display:block;width:100%;min-height:180px;resize:vertical;padding:10px;border:1px solid #bdcbd5;border-radius:6px;background:#f6f8fa;color:var(--ink);font:12px/1.7 var(--mono)}.manual-copy textarea:focus-visible{outline:3px solid #169f94;outline-offset:2px}
+    .rerank-stage{margin-top:24px;border:1px solid var(--line);border-radius:9px;background:white;padding:18px}.rerank-controls{display:flex;align-items:start;justify-content:space-between;gap:18px}.rerank-intro{min-width:0;max-width:850px}.rerank-intro h2{margin-bottom:5px}.cloud-consent{display:flex;gap:8px;align-items:start;margin-top:10px;font-size:12px;color:var(--ink)}.cloud-consent input{margin:4px 0 0;flex:none}.rerank-action{min-width:198px;flex:none}.rerank-action small{white-space:normal}.rerank-status{font-size:12px;color:var(--muted);margin-top:10px}.rerank-results{margin-top:17px}.rerank-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.route.reranker{--route:#ae7541}.rank-chip.reranker{color:#9b642e}.movement{display:inline-block;font:11px/1.7 var(--mono);color:var(--muted)}.movement.up{color:#196c5d}.movement.down{color:#975330}.new-top{display:inline-block;margin-left:6px;padding:1px 5px;border-radius:4px;background:#e8f4ed;color:#196c5d;font-size:10px}.ranking-detail{margin-top:14px;border:1px solid var(--line);border-radius:7px;overflow:hidden}.ranking-detail summary{cursor:pointer;padding:11px 13px;color:var(--teal);font-size:13px}.rank-table-wrap{overflow:auto;padding:0 12px 12px}.rank-table{width:100%;border-collapse:collapse;font-size:12px;text-align:left}.rank-table th,.rank-table td{padding:9px 10px;border-bottom:1px solid #e7edf1;vertical-align:top}.rank-table th{background:#f7f9fa;white-space:nowrap;color:var(--muted);font-weight:550}.rank-table td:not(:first-child){white-space:nowrap}.rank-table tr.selected{background:#eff7f5}.table-select{border:0;background:transparent;color:var(--teal);padding:0;text-align:left;font:inherit;line-height:1.6}.table-select:hover{text-decoration:underline}.table-select .chunk-id{margin-top:2px}.rerank-boundary{font-size:12px;color:var(--muted);margin-top:10px}@media(max-width:760px){.rerank-controls{flex-direction:column;gap:12px}.rerank-action{width:100%}.rerank-columns{gap:11px}.rerank-columns .hit-list{grid-template-columns:1fr}.rerank-stage{padding:14px}}@media(max-width:540px){.rerank-columns{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -36,7 +37,7 @@
         <button id="hybrid-button" class="action primary" type="button" disabled><span>运行三路对照</span><small>问题编码 1 次 + 身份核对 2 次</small></button>
       </div>
     </div>
-    <div class="plan-line"><span id="plan-scope">正在核对已有索引与检索范围…</span><span id="query-help">只点击“三路对照”才会发送当前问题给本地模型。</span></div>
+    <div class="plan-line"><span id="plan-scope">正在核对已有索引与检索范围…</span><span id="query-help">点击“三路对照”会发送当前问题给本地模型；云端重排需另行确认。</span></div>
     <div id="status-row" class="status-row" role="status" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span id="status">正在读取计划；尚未运行检索。</span></div>
     <p id="error" class="error" role="alert" hidden></p>
   </form>
@@ -47,6 +48,8 @@
     <p class="share-notice">摘要含完整候选排名；JSON另含全部候选原文和来源元数据（可能含本机路径）。分享前请检查敏感内容；刷新或换题前请先导出需要保留的结果。</p>
     <div id="export-fallback" class="manual-copy" hidden><label for="export-fallback-text">浏览器未允许自动复制。请在下方全选后按 ⌘C / Ctrl+C 手动复制。</label><textarea id="export-fallback-text" aria-label="手动复制实验摘要" readonly spellcheck="false"></textarea></div>
   </section>
+
+  <p class="notice"><a href="#rerank-stage">跳到云端重排：固定同一候选，查看前后对照 ↓</a></p>
 
   <section class="workspace" aria-labelledby="results-title">
     <div class="section-head"><h2 id="results-title">排序对照</h2><p id="result-summary" class="result-summary">先看关键词，再观察两路如何互补</p></div>
@@ -67,6 +70,29 @@
     <p class="explain"><span class="marker" aria-hidden="true">↳</span><span>三列默认展示相同数量的前排候选；折叠的额外召回仍全部参与 RRF。点选同一块可对照其原始召回名次、查看原文。三种分数的尺度不同，不能横向比较数值大小。</span></p>
   </section>
 
+  <section id="rerank-stage" class="rerank-stage" aria-labelledby="rerank-title">
+    <div class="rerank-controls">
+      <div class="rerank-intro">
+        <h2 id="rerank-title">下一层：同一候选，重排前后有什么不同？</h2>
+        <p id="rerank-plan" class="notice">先完成“三路对照”，再把两路召回的完整去重并集交给云端 Reranker；不是只重排 RRF 前 5 块。</p>
+        <p id="rerank-disclosure" class="notice">云端重排会发送当前问题和全部候选正文，可能产生费用；不发送来源路径等元数据。不重新编码、检索或生成回答；一次请求，无自动重试。</p>
+        <label class="cloud-consent"><input id="rerank-consent" type="checkbox" disabled><span>我同意将本轮问题与全部候选正文发送给上述云端重排服务。</span></label>
+      </div>
+      <button id="rerank-button" class="action rerank-action" type="button" disabled><span>对同一候选云端重排</span><small id="rerank-button-help">先完成三路对照，并勾选发送确认</small></button>
+    </div>
+    <p id="rerank-status" class="rerank-status" role="status" aria-live="polite">尚未发送云端重排请求。</p>
+    <p id="rerank-error" class="error" role="alert" hidden></p>
+    <div id="rerank-results" class="rerank-results" hidden>
+      <div class="section-head"><h2>固定候选池的前后对照</h2><p id="rerank-summary" class="result-summary"></p></div>
+      <div class="rerank-columns">
+        <section class="route rrf" aria-labelledby="rrf-before-title"><header class="route-head"><div class="route-name"><h3 id="rrf-before-title">重排前 · RRF</h3><span id="rrf-before-count" class="route-count"></span></div><p>完整候选池按两路名次融合后的前排</p></header><ol id="rrf-before-list" class="hit-list"></ol></section>
+        <section class="route reranker" aria-labelledby="reranker-title"><header class="route-head"><div class="route-name"><h3 id="reranker-title">重排后 · Reranker</h3><span id="reranker-count" class="route-count"></span></div><p>模型联合判断问题与每块正文，再按分数排序</p></header><ol id="reranker-list" class="hit-list"></ol></section>
+      </div>
+      <details id="ranking-detail" class="ranking-detail"><summary id="ranking-detail-label">展开完整候选池与排名变化</summary><div class="rank-table-wrap"><table class="rank-table"><thead><tr><th scope="col">文本块 · 点击查看完整原文</th><th scope="col">RRF 名次</th><th scope="col">重排名次</th><th scope="col">名次变化</th><th scope="col">重排分数</th><th scope="col">前排变化</th></tr></thead><tbody id="rank-change-body"></tbody></table></div></details>
+      <p id="rerank-boundary" class="rerank-boundary">上升、下降或新进入前排只是排序变化，不代表已经证明更准确；重排也找不回两路都没有召回的内容。</p>
+    </div>
+  </section>
+
   <section id="detail" class="detail" aria-labelledby="detail-title" hidden>
     <header class="detail-head"><div class="detail-overline"><span class="detail-label">选中同一文本块</span><div id="rank-strip" class="rank-strip"></div></div><h2 id="detail-title"></h2></header>
     <div class="detail-body"><dl id="detail-metadata" class="metadata"></dl><p id="excerpt-label" class="text-label"></p><pre id="excerpt" class="passage"></pre><details id="full-text" class="full-text"><summary>展开该块完整原文</summary><pre id="full-passage" class="passage"></pre></details></div>
@@ -74,7 +100,7 @@
 
   <p class="boundary"><strong>这里展示候选证据，不生成答案。</strong>RRF 排名靠前不保证内容更准确；相似度不是概率。文档中的代码只作为文字展示，不执行命令。</p>
   <p id="notice" class="notice"></p>
-  <footer class="footer"><span>同一份正文 · 同一检索范围 · 不重排 · 不调用聊天模型</span><span id="request-summary">首次打开只读取计划，模型请求为 0。</span></footer>
+  <footer class="footer"><span>同一份正文 · 同一检索范围 · 云端重排需单独确认 · 不调用聊天模型</span><span id="request-summary">首次打开只读取计划，模型请求为 0。</span></footer>
 </main>
 <script src="/assets/retrieval_export.js"></script>
 <script>
@@ -85,9 +111,9 @@ const routeNames = {bm25:"BM25",dense:"Dense",rrf:"RRF"};
 const state = {plan:null,data:null,busy:false,selected:null,sequence:0,receivedAt:null,copying:false};
 function node(tag,className,text){const item=document.createElement(tag);if(className)item.className=className;if(text!==undefined)item.textContent=String(text);return item;}
 function setStatus(message,busy=false){byId("status").textContent=message;byId("status-row").classList.toggle("busy",busy);}
-function setBusy(busy){state.busy=busy;for(const id of ["query","bm25-button","hybrid-button"])byId(id).disabled=busy||!state.plan;byId("columns").setAttribute("aria-busy",String(busy));updateExportButtons();}
+function setBusy(busy){state.busy=busy;for(const id of ["query","bm25-button","hybrid-button"])byId(id).disabled=busy||!state.plan;byId("columns").setAttribute("aria-busy",String(busy));updateExportButtons();updateRerankControls();}
 function showError(message){byId("error").textContent=message;byId("error").hidden=false;}
-function clearResults(){state.data=null;state.selected=null;state.receivedAt=null;clearShareNotice();updateExportButtons();byId("detail").hidden=true;for(const key of Object.keys(routeNames)){byId(key+"-list").replaceChildren();byId(key+"-list").hidden=true;if(key!=="rrf"){byId(key+"-more-list").replaceChildren();byId(key+"-more").hidden=true;byId(key+"-more").open=false;}}}
+function clearResults(){state.data=null;state.selected=null;state.receivedAt=null;clearShareNotice();updateExportButtons();clearRerankResults();byId("detail").hidden=true;for(const key of Object.keys(routeNames)){byId(key+"-list").replaceChildren();byId(key+"-list").hidden=true;if(key!=="rrf"){byId(key+"-more-list").replaceChildren();byId(key+"-more").hidden=true;byId(key+"-more").open=false;}}}
 function showEmpty(key,title,message){const box=byId(key+"-empty");box.replaceChildren(node("strong","",title),node("p","",message));box.hidden=false;}
 function pendingResults(mode){clearResults();for(const key of Object.keys(routeNames)){byId(key+"-count").textContent="待检索";showEmpty(key,"等待本轮结果",key!=="bm25"&&mode==="bm25"?"本轮只运行 BM25。":"正在核对与计算，完成后展示候选。");}byId("result-summary").textContent="正在处理当前问题…";}
 function safeSource(value){if(typeof value!=="string")return null;try{const url=new URL(value);return ["http:","https:"].includes(url.protocol)&&!url.username&&!url.password?url.href:null;}catch{return null;}}
@@ -98,14 +124,17 @@ function makeHit(key,hit){
   const record=recordFor(hit.chunk_id),metadata=record.metadata||{},item=node("li","hit");item.dataset.chunkId=hit.chunk_id;
   const button=node("button","card-select");button.type="button";button.setAttribute("aria-pressed","false");button.setAttribute("aria-controls","detail");
   const title=typeof metadata.title==="string"&&metadata.title?metadata.title:"未记录标题";
-  button.setAttribute("aria-label",`${routeNames[key]} 第 ${hit.rank} 名，${title}，块 ${hit.chunk_id}。查看该块原文与各路排名。`);
-  const top=node("span","card-top");top.append(node("span","rank",hit.rank),node("span","score",`${key==="dense"?"COSINE":routeNames[key]} ${number(hit.score,key==="rrf"?6:4)}`));
+  const routeName=routeNames[key]||"Reranker";
+  button.setAttribute("aria-label",`${routeName} 第 ${hit.rank} 名，${title}，块 ${hit.chunk_id}。查看该块原文与各路排名。`);
+  const top=node("span","card-top");top.append(node("span","rank",hit.rank),node("span","score",`${key==="dense"?"COSINE":routeName} ${number(hit.score,key==="rrf"?6:4)}`));
   button.append(top,node("span","card-title",title),node("span","chunk-id",hit.chunk_id),node("span","snippet",preview(record.text,160)));
   button.addEventListener("click",()=>selectChunk(hit.chunk_id));item.append(button);
   if(key==="bm25"){
     const footer=node("div","card-foot"),terms=node("div","terms");terms.append(node("span","","命中词"));for(const term of hit.matched_terms||[])terms.append(node("span","term",term));footer.append(terms);item.append(footer);
   }else if(key==="rrf"){
     const footer=node("div","card-foot");for(const source of ["bm25","dense"]){const rank=hit.ranks&&hit.ranks[source],value=hit.contributions&&hit.contributions[source];footer.append(node("span","contribution",rank?`${routeNames[source]} #${rank} → 1/(${state.data.rrf_constant}+${rank}) = ${number(value,6)}`:`${routeNames[source]} 未入召回列表 · 贡献 0`));}item.append(footer);
+  }else if(key==="reranker"){
+    const footer=node("div","card-foot");footer.append(node("span","movement "+(hit.rank_change>0?"up":hit.rank_change<0?"down":""),`原 RRF #${hit.rrf_rank} · ${movementText(hit.rank_change)}`));if(hit.rrf_rank>state.data.rerank_comparison.final_k&&hit.rank<=state.data.rerank_comparison.final_k)footer.append(node("span","new-top",`新进入前 ${state.data.rerank_comparison.final_k}`));item.append(footer);
   }
   return item;
 }
@@ -114,8 +143,11 @@ function selectChunk(id,reveal=true){
   if(!state.data)return;const record=recordFor(id);if(!record)return;state.selected=id;
   if(reveal)for(const key of ["bm25","dense"]){const index=state.data.routes[key].findIndex(candidate=>candidate.chunk_id===id);if(index>=state.data.top_k)byId(key+"-more").open=true;}
   for(const item of document.querySelectorAll(".hit")){const selected=item.dataset.chunkId===id;item.classList.toggle("selected",selected);item.querySelector("button").setAttribute("aria-pressed",String(selected));}
+  for(const row of document.querySelectorAll(".rank-row"))row.classList.toggle("selected",row.dataset.chunkId===id);
   const metadata=record.metadata||{};byId("detail-title").textContent=metadata.title||"未记录标题";
   const strip=byId("rank-strip");strip.replaceChildren();for(const key of Object.keys(routeNames)){const hit=state.data.routes[key].find(candidate=>candidate.chunk_id===id);strip.append(node("span","rank-chip "+key,`${routeNames[key]} ${hit?"#"+hit.rank:"未入列"}`));}
+  const fullRrf=Array.isArray(state.data.rrf_pool)&&state.data.rrf_pool.find(hit=>hit.chunk_id===id);if(fullRrf&&fullRrf.rank>state.data.top_k)strip.append(node("span","rank-chip rrf",`完整 RRF #${fullRrf.rank}`));
+  if(Array.isArray(state.data.routes.reranker)){const hit=state.data.routes.reranker.find(candidate=>candidate.chunk_id===id);strip.append(node("span","rank-chip reranker",`Reranker ${hit?"#"+hit.rank:"未入列"}`));}
   byId("detail-metadata").replaceChildren();addMetadata("块 ID",id);
   const sections=Array.isArray(metadata.sections)?metadata.sections.filter(Array.isArray).map(path=>path.map(String).join(" / ")).join(" ｜ "):"";addMetadata("章节",sections||"未记录");
   const url=safeSource(metadata.source_url),source=node("dd");if(url){const link=node("a","",url);link.href=url;link.target="_blank";link.rel="noopener noreferrer";source.append(link);}else{source.textContent=metadata.source||"未记录可用的来源链接";}byId("detail-metadata").append(node("dt","","来源"),source);
@@ -131,8 +163,68 @@ function validateData(data){
     const seen=new Set();for(const hit of data.routes[key]){const record=typeof hit.chunk_id==="string"&&Object.prototype.hasOwnProperty.call(data.records,hit.chunk_id)?data.records[hit.chunk_id]:null;if(!record||typeof record.text!=="string"||!Number.isInteger(hit.rank)||hit.rank<=0||typeof hit.score!=="number"||!Number.isFinite(hit.score)||seen.has(hit.chunk_id))throw new Error("候选身份或分数不完整");seen.add(hit.chunk_id);}
   }
 }
+// 重排不重跑检索：浏览器只提交服务端保存的实验编号，候选正文由服务端取回。
+function rerankSource(){
+  const data=state.data,config=state.plan&&state.plan.reranker;
+  return Boolean(data&&data.mode==="hybrid"&&typeof data.experiment_id==="string"&&data.experiment_id&&Array.isArray(data.rrf_pool)&&data.rrf_pool.length&&config&&typeof config.model==="string"&&byId("query").value.trim()===data.query);
+}
+function updateRerankControls(){
+  const config=state.plan&&state.plan.reranker,source=rerankSource(),completed=Boolean(state.data&&Array.isArray(state.data.routes.reranker)),pool=source?state.data.rrf_pool:[],maximum=config&&Number.isInteger(config.max_candidates)?config.max_candidates:16,withinLimit=pool.length<=maximum;
+  const consent=byId("rerank-consent");consent.disabled=state.busy||!source||completed||!withinLimit;
+  byId("rerank-button").disabled=state.busy||!source||completed||!withinLimit||!consent.checked;
+  byId("rerank-button-help").textContent=state.busy?"等待当前操作完成":completed?"本轮已完成；再次查看或导出不新增请求":!source?"先完成三路对照，并勾选发送确认":!withinLimit?`候选超过本轮上限 ${maximum} 块`:!consent.checked?"请先确认下方云端发送范围":`仅重排现有 ${pool.length} 块 · 不重新检索`;
+  byId("rerank-plan").textContent=source?`本轮两路召回去重后共 ${pool.length} 块，全部参与云端重排；对比 RRF 与 Reranker 前 ${state.data.top_k} 块，不提前截断候选池。`:"先完成“三路对照”，再把两路召回的完整去重并集交给云端 Reranker；不是只重排 RRF 前 5 块。";
+  const model=config&&typeof config.model==="string"?config.model:"qwen3.7-text-rerank",url=config&&typeof config.url==="string"?config.url:"（服务地址待计划确认）";
+  byId("rerank-disclosure").textContent=`云端服务：${model} · ${url}。点击后将发送当前问题和全部候选正文，可能产生费用；不发送来源路径等元数据。不重新编码、检索或生成回答；一次请求，无自动重试。`;
+}
+function clearRerankResults(){
+  byId("rerank-results").hidden=true;byId("rerank-error").hidden=true;byId("rerank-error").textContent="";byId("rrf-before-list").replaceChildren();byId("reranker-list").replaceChildren();byId("rank-change-body").replaceChildren();byId("ranking-detail").open=false;byId("rerank-consent").checked=false;byId("rerank-status").textContent="尚未发送云端重排请求。";updateRerankControls();
+}
+function movementText(change){return change>0?`↑ 上升 ${change} 名`:change<0?`↓ 下降 ${-change} 名`:"— 名次不变";}
+function validateRerankData(data,original){
+  validateData(data);
+  if(data.mode!=="hybrid"||data.query!==original.query||data.experiment_id!==original.experiment_id||!Array.isArray(data.rrf_pool)||JSON.stringify(data.rrf_pool)!==JSON.stringify(original.rrf_pool)||JSON.stringify(data.records)!==JSON.stringify(original.records))throw new Error("重排结果与原实验或原文不一致");
+  for(const key of Object.keys(routeNames))if(JSON.stringify(data.routes[key])!==JSON.stringify(original.routes[key]))throw new Error("重排不应改变原三路检索结果");
+  const pool=data.rrf_pool,hits=data.routes.reranker,comparison=data.rerank_comparison;
+  if(!Array.isArray(hits)||hits.length!==pool.length||!comparison||comparison.candidate_count!==pool.length||comparison.final_k!==original.top_k||typeof comparison.model!=="string"||!Array.isArray(comparison.input_order)||comparison.input_order.length!==pool.length)throw new Error("重排候选池或说明不完整");
+  const expected=new Map(pool.map(hit=>[hit.chunk_id,hit.rank])),seen=new Set();
+  for(let index=0;index<pool.length;index++)if(comparison.input_order[index]!==pool[index].chunk_id)throw new Error("重排输入顺序与原候选池不一致");
+  for(let index=0;index<hits.length;index++){
+    const hit=hits[index];if(!hit||!expected.has(hit.chunk_id)||seen.has(hit.chunk_id)||hit.rank!==index+1||!Number.isFinite(hit.score)||!Number.isInteger(hit.input_index)||comparison.input_order[hit.input_index]!==hit.chunk_id||hit.rrf_rank!==expected.get(hit.chunk_id)||hit.rank_change!==hit.rrf_rank-hit.rank)throw new Error("重排候选身份、分数或排名变化不完整");seen.add(hit.chunk_id);
+  }
+  const counts=comparison.request_counts||{};if(counts.embedding!==0||counts.http!==1||counts.reranker!==1||counts.chat!==0)throw new Error("重排阶段请求计数与约定不一致");
+}
+function renderRerankResults(){
+  const data=state.data,comparison=data.rerank_comparison,hits=data.routes.reranker,limit=comparison.final_k,pool=data.rrf_pool;
+  byId("rrf-before-list").replaceChildren(...pool.slice(0,limit).map(hit=>makeHit("rrf",hit)));byId("reranker-list").replaceChildren(...hits.slice(0,limit).map(hit=>makeHit("reranker",hit)));
+  byId("rrf-before-count").textContent=`前 ${Math.min(limit,pool.length)} / ${pool.length} 块`;byId("reranker-count").textContent=`前 ${Math.min(limit,hits.length)} / ${hits.length} 块`;
+  const newcomers=hits.filter(hit=>hit.rank<=limit&&hit.rrf_rank>limit).length;
+  byId("rerank-summary").textContent=`同一 ${pool.length} 块 · ${newcomers} 块新进入前 ${limit} · 未新增召回`;
+  byId("ranking-detail-label").textContent=`展开全部 ${pool.length} 块：完整重排顺序、原 RRF 名次与变化`;
+  const rows=hits.map(hit=>{
+    const row=node("tr","rank-row");row.dataset.chunkId=hit.chunk_id;const record=recordFor(hit.chunk_id),metadata=record.metadata||{},cell=node("td"),button=node("button","table-select",metadata.title||"未记录标题");button.type="button";button.setAttribute("aria-controls","detail");button.append(node("span","chunk-id",hit.chunk_id));button.addEventListener("click",()=>selectChunk(hit.chunk_id));cell.append(button);row.append(cell,node("td","mono",`#${hit.rrf_rank}`),node("td","mono",`#${hit.rank}`));
+    const movement=node("td");movement.append(node("span","movement "+(hit.rank_change>0?"up":hit.rank_change<0?"down":""),movementText(hit.rank_change)));row.append(movement,node("td","mono",number(hit.score,6)),node("td","",hit.rank<=limit&&hit.rrf_rank>limit?`新进入前 ${limit}`:hit.rank>limit&&hit.rrf_rank<=limit?`移出前 ${limit}`:"—"));return row;
+  });
+  byId("rank-change-body").replaceChildren(...rows);byId("rerank-results").hidden=false;
+  byId("rerank-boundary").textContent=`${typeof comparison.notice==="string"?comparison.notice+" ":""}上升、下降或新进入前排只是排序变化，不代表已经证明更准确；重排也找不回两路都没有召回的内容。`;
+}
+async function rerank(){
+  if(state.busy||!rerankSource()||!byId("rerank-consent").checked||Array.isArray(state.data.routes.reranker))return;
+  const original=state.data,sequence=state.sequence,experimentId=original.experiment_id;setBusy(true);byId("rerank-error").hidden=true;byId("rerank-results").hidden=true;byId("rerank-status").textContent=`正在发送同一 ${original.rrf_pool.length} 块正文到云端重排；没有重新编码或检索，请勿重复点击。`;setStatus("原三路结果已保留，正在等待云端重排…",true);
+  try{
+    const response=await fetch("/api/rerank",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{"Content-Type":"application/json","X-Retrieval-Lab":"1"},body:JSON.stringify({experiment_id:experimentId})});
+    const data=await response.json();if(sequence!==state.sequence||state.data!==original)return;if(!response.ok)throw new Error(typeof data.detail==="string"?data.detail:"云端重排未完成");validateRerankData(data,original);
+    state.data=original.rerank_failure?{...data,rerank_failure:original.rerank_failure}:data;state.receivedAt=new Date().toISOString();renderRerankResults();if(state.selected)selectChunk(state.selected,false);clearShareNotice();byId("export-status").textContent="本轮已包含重排对照，可复制摘要或导出完整 JSON；导出不会重新请求模型。";
+    const counts=data.request_counts||{};byId("request-summary").textContent=`${original.rerank_failure?"已完成阶段计数（不含失败尝试）":"本轮累计"}：问题编码 ${counts.embedding??0} · HTTP ${counts.http??0} · 重排 ${counts.reranker??0} · 聊天 ${counts.chat??0}`;
+    byId("rerank-status").textContent=`云端重排完成：本阶段 Embedding 0 · HTTP 1 · Reranker 1 · 聊天 0；本轮已锁定结果，不再重复请求。${original.rerank_failure?" 此前失败尝试可能已产生云端费用，未计入上述已完成阶段计数。":""}`;setStatus("同一候选池重排对照已完成；先比较原文是否更能回答问题，再判断排序变化是否有帮助。");if(typeof byId("rerank-results").scrollIntoView==="function")byId("rerank-results").scrollIntoView({block:"start"});
+  }catch(error){
+    if(sequence!==state.sequence||state.data!==original)return;
+    const failureMessage=error instanceof Error?error.message:"请检查服务状态";state.data={...original,rerank_failure:{message:"此前有未完成的重排尝试，云端请求可能已发生。",request_may_have_occurred:true,request_counts_scope:"completed_stages_only"}};
+    byId("rerank-results").hidden=true;byId("rrf-before-list").replaceChildren();byId("reranker-list").replaceChildren();byId("rank-change-body").replaceChildren();byId("rerank-error").textContent="重排停止："+failureMessage+"。原三路结果保留，仍可复制或导出。失败前云端请求可能已经发生；再次点击会重新发起请求，不会自动重试。";byId("rerank-error").hidden=false;byId("rerank-status").textContent="本次重排未完成，未展示不完整排序；失败请求的实际费用与计数尚未确定。";byId("request-summary").textContent="原计数仅含已完成的检索阶段，不含失败重排；该云端请求可能已发生，实际费用与总计数未知。";setStatus("原三路结果保留；重排失败，可先导出已有结果，再决定是否重新请求。");
+  }finally{if(sequence===state.sequence)setBusy(false);}
+}
 function renderResults(data){
-  validateData(data);state.data=data;state.selected=null;state.receivedAt=new Date().toISOString();clearShareNotice();byId("export-status").textContent="本轮结果已就绪，可复制摘要或导出完整JSON；不会重新调用模型。";
+  validateData(data);state.data=data;state.selected=null;state.receivedAt=new Date().toISOString();clearRerankResults();clearShareNotice();byId("export-status").textContent="本轮结果已就绪，可复制摘要或导出完整JSON；不会重新调用模型。";
   for(const key of Object.keys(routeNames)){
     const hits=data.routes[key],visible=key==="rrf"?hits:hits.slice(0,data.top_k),list=byId(key+"-list");list.replaceChildren(...visible.map(hit=>makeHit(key,hit)));list.hidden=!hits.length;byId(key+"-empty").hidden=Boolean(hits.length);byId(key+"-count").textContent=visible.length<hits.length?`前 ${visible.length} / ${hits.length} 块`:`${hits.length} 块`;
     if(key!=="rrf"){const extra=hits.slice(data.top_k),more=byId(key+"-more");more.open=false;more.hidden=!extra.length;byId(key+"-more-label").textContent=`展开全部 ${hits.length} 条召回（另 ${extra.length} 块）`;const extraList=byId(key+"-more-list");extraList.setAttribute("start",String(data.top_k+1));extraList.replaceChildren(...extra.map(hit=>makeHit(key,hit)));}
@@ -144,7 +236,7 @@ function renderResults(data){
   byId("notice").textContent=typeof data.notice==="string"?data.notice:"";
   setStatus(`${data.mode==="bm25"?"BM25 本地检索完成，模型请求为 0。":"三路对照完成，问题只编码一次，RRF 在本地计算。"} 问题分词：${tokens.length?tokens.join(" / "):"过滤后没有有效词"}`);
   const first=data.routes.rrf[0]||data.routes.bm25[0]||data.routes.dense[0];if(first)selectChunk(first.chunk_id,false);
-  updateExportButtons();
+  updateExportButtons();updateRerankControls();
 }
 // 导出只读取已经收到的state.data，不调用compare()、fetch()或任何模型。
 function hasExportResult(){return Boolean(!state.busy&&state.data&&state.receivedAt&&window.RetrievalExport&&byId("query").value.trim()===state.data.query);}
@@ -193,6 +285,8 @@ async function compare(mode){
 }
 byId("search-form").addEventListener("submit",event=>{event.preventDefault();compare("bm25");});
 byId("hybrid-button").addEventListener("click",()=>compare("hybrid"));
+byId("rerank-consent").addEventListener("change",updateRerankControls);
+byId("rerank-button").addEventListener("click",rerank);
 byId("query").addEventListener("input",()=>{
   if(state.busy||!state.data||byId("query").value.trim()===state.data.query)return;clearResults();for(const key of Object.keys(routeNames)){byId(key+"-count").textContent="待检索";showEmpty(key,"问题已修改","点击上方按钮，查看当前问题的排序。");}byId("result-summary").textContent="等待检索当前问题";byId("error").hidden=true;setStatus("问题已修改，尚未发送新请求。");
 });

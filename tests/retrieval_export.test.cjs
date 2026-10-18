@@ -60,6 +60,53 @@ function fixture(mode = "hybrid") {
   };
 }
 
+function rerankFixture(candidateCount = 10) {
+  const data = fixture();
+  for (let number = 11; number <= candidateCount; number++) {
+    const id = `chunk-${number}`;
+    data.records[id] = { chunk_id: id, text: `完整合成正文 ${number}，不可执行。`, metadata: { title: `额外候选${number}`, chunk_id: id } };
+  }
+  if (candidateCount !== 10) data.routes.dense = Array.from({ length: 8 }, (_, index) => ({
+    chunk_id: `chunk-${candidateCount - 7 + index}`, rank: index + 1, score: 0.91 - index / 100,
+  }));
+  data.experiment_id = "opaque-server-experiment-01";
+  const union = [...new Set(["bm25", "dense"].flatMap(key => data.routes[key].map(hit => hit.chunk_id)))];
+  data.rrf_pool = union.map(id => {
+    const ranks = {}, contributions = {};
+    for (const key of ["bm25", "dense"]) {
+      const hit = data.routes[key].find(item => item.chunk_id === id);
+      ranks[key] = hit ? hit.rank : null;
+      contributions[key] = hit ? 1 / (data.rrf_constant + hit.rank) : 0;
+    }
+    return { chunk_id: id, ranks, contributions, score: contributions.bm25 + contributions.dense };
+  }).sort((a, b) => b.score - a.score).map((hit, index) => ({ ...hit, rank: index + 1 }));
+  data.routes.rrf = data.rrf_pool.slice(0, data.top_k);
+  const poolMap = new Map(data.rrf_pool.map((hit, index) => [hit.chunk_id, { hit, index }]));
+  const order = candidateCount === 10 ? [9, 3, 1, 8, 4, 5, 6, 7, 2, 10]
+    : [candidateCount, ...data.rrf_pool.map(hit => Number(hit.chunk_id.split("-")[1])).filter(number => number !== candidateCount)];
+  data.routes.reranker = order.map((number, index) => {
+    const id = `chunk-${number}`, old = poolMap.get(id), rank = index + 1;
+    return { chunk_id: id, rank, score: 0.9876543210123456 - index / 25,
+      input_index: old.index, rrf_rank: old.hit.rank, rank_change: old.hit.rank - rank };
+  });
+  data.rerank_comparison = {
+    candidate_count: data.rrf_pool.length, final_k: 5, model: "synthetic-reranker-only",
+    input_order: data.rrf_pool.map(hit => hit.chunk_id),
+    request_counts: { embedding: 0, http: 1, reranker: 1, chat: 0 },
+    notice: "模型排序需要人审；同分不是相关性标注。",
+  };
+  data.request_counts = { embedding: 1, http: 4, reranker: 1, chat: 0 };
+  return data;
+}
+
+function beforeRerank(completed = rerankFixture(13)) {
+  const data = JSON.parse(JSON.stringify(completed));
+  delete data.routes.reranker;
+  delete data.rerank_comparison;
+  data.request_counts = { embedding: 1, http: 3, reranker: 0, chat: 0 };
+  return data;
+}
+
 function deepFreeze(value) {
   if (value && typeof value === "object") {
     Object.freeze(value);
@@ -138,6 +185,152 @@ test("empty BM25 hybrid and BM25-only summaries retain explicit route semantics"
   lexical.routes.bm25 = [];
   lexical.records = {};
   assert.match(helper.summaryText(helper.buildReport(lexical, TIMES)), /\| 无候选 \|/);
+});
+
+test("current BM25 server response permits an explicit empty root RRF pool but rejects a populated one", () => {
+  const data = fixture("bm25");
+  data.rrf_pool = [];
+  const report = helper.buildReport(deepFreeze(data), TIMES);
+  assert.deepEqual(report.result.rrf_pool, []);
+  const summary = helper.summaryText(report);
+  assert.match(summary, /仅BM25（Dense\/RRF未运行）/);
+  assert.match(summary, /BM25 8；Dense 0；RRF 0；去重并集8块/);
+  assert.match(summary, /Embedding 0；HTTP 0；Reranker 0；聊天 0/);
+  assert.ok(summary.split("\n").filter(line => line.startsWith("| chunk-")).every(line => line.endsWith("| 未运行 | 未运行 |")));
+  const invalid = fixture("bm25");
+  invalid.rrf_pool = [{ chunk_id: "chunk-1", rank: 1, score: 1 / 61 }];
+  assert.throws(() => helper.buildReport(invalid, TIMES), /仅BM25模式不能有融合候选/);
+});
+
+test("reranker JSON preserves the full input pool, original precision, rank mappings, identity, and cumulative counts", () => {
+  const result = deepFreeze(rerankFixture());
+  const report = helper.buildReport(result, { ...TIMES, selectedChunkId: "chunk-9" });
+  assert.deepEqual(report.result, result);
+  const saved = JSON.parse(JSON.stringify(report)).result;
+  assert.equal(saved.experiment_id, "opaque-server-experiment-01");
+  assert.equal(saved.rrf_pool.length, 10);
+  assert.equal(saved.routes.rrf.length, 5);
+  assert.equal(saved.routes.reranker.length, 10);
+  assert.equal(saved.routes.reranker[0].score, result.routes.reranker[0].score);
+  assert.deepEqual(saved.rerank_comparison.input_order, result.rrf_pool.map(hit => hit.chunk_id));
+  assert.deepEqual(saved.request_counts, { embedding: 1, http: 4, reranker: 1, chat: 0 });
+  assert.deepEqual(saved.rerank_comparison.request_counts, { embedding: 0, http: 1, reranker: 1, chat: 0 });
+  assert.ok(saved.records["chunk-9"].text.endsWith("END-9"));
+});
+
+test("reranker summary adds a separate complete comparison without changing original three-route table semantics", () => {
+  const data = deepFreeze(rerankFixture());
+  const before = JSON.stringify(data);
+  const summary = helper.summaryText(helper.buildReport(data, TIMES));
+  // Both tables have five columns; inspect each section independently instead of counting only visible cards.
+  const originalTable = summary.split("## 完整候选排名")[1].split("## RRF贡献")[0];
+  const originalRows = originalTable.split("\n").filter(line => line.startsWith("| chunk-"));
+  assert.equal(originalRows.length, 10);
+  assert.ok(originalRows.find(line => line.startsWith("| chunk-9 | ")).endsWith("| 未入融合前5 |"));
+  const comparisonTable = summary.split("## 完整候选重排对照")[1].split("## 来源")[0];
+  const comparisonRows = comparisonTable.split("\n").filter(line => line.startsWith("| chunk-"));
+  assert.equal(comparisonRows.length, 10);
+  assert.deepEqual(comparisonRows.map(line => line.split(" | ")[0]), data.routes.reranker.map(hit => `| ${hit.chunk_id}`));
+  assert.match(comparisonRows[0], /chunk-9.*#9 \/.*#1 \/.*上升8.*新进Top5/);
+  assert.match(comparisonRows[5], /chunk-5.*下降3.*退出Top5/);
+  assert.match(comparisonRows[1], /保留Top5/);
+  assert.match(comparisonRows[9], /不变.*仍在Top5外/);
+  assert.match(summary, /完整两路去重并集10块，不是先取RRF前5块/);
+  assert.match(summary, /实际请求：Embedding 1；HTTP 4；Reranker 1；聊天 0/);
+  assert.match(summary, /本次成功重排新增请求：Embedding 0；HTTP 1；Reranker 1；聊天 0/);
+  assert.match(summary, /完成阶段累计，不重复相加/);
+  assert.match(summary, /失败请求另计，可能未包含/);
+  assert.match(summary, /只接收问题和候选正文，不发送候选元数据/);
+  assert.match(summary, /无人工相关性标注，不能据此宣称更好/);
+  assert.match(summary, /原始分数不可混加/);
+  assert.match(summary, /重排分数不是概率或正确率/);
+  assert.match(summary, /synthetic-reranker-only/);
+  assert.match(summary, /opaque-server-experiment-01/);
+  assert.equal(JSON.stringify(data), before);
+});
+
+test("complete RRF pool can be exported before running reranker", () => {
+  const data = rerankFixture();
+  delete data.routes.reranker;
+  delete data.rerank_comparison;
+  data.request_counts = { embedding: 1, http: 3, reranker: 0, chat: 0 };
+  const report = helper.buildReport(data, TIMES);
+  assert.equal(report.result.rrf_pool.length, 10);
+  assert.ok(!helper.summaryText(report).includes("## 完整候选重排对照"));
+});
+
+test("failed rerank history survives export before and after a successful manual retry without inventing counts", () => {
+  for (const completed of [false, true]) {
+    const data = rerankFixture();
+    data.rerank_failure = {
+      message: "合成失败 <img src=x onerror=alert(1)> | 服务未给出有效重排结果",
+      request_may_have_occurred: true,
+      request_counts_scope: "completed_stages_only",
+    };
+    if (!completed) {
+      delete data.routes.reranker;
+      delete data.rerank_comparison;
+      data.request_counts = { embedding: 1, http: 3, reranker: 0, chat: 0 };
+    }
+    const report = helper.buildReport(deepFreeze(data), TIMES);
+    assert.deepEqual(report.result.rerank_failure, data.rerank_failure);
+    const summary = helper.summaryText(report);
+    assert.match(summary, /重排失败经历：合成失败 &lt;img/);
+    assert.match(summary, /失败请求可能已发送，处理量与费用未知/);
+    assert.match(summary, /仅覆盖完成阶段，不包含未知的失败请求/);
+    assert.match(summary, /手动重试成功也不会抹去这次失败经历/);
+    assert.match(summary, completed ? /Embedding 1；HTTP 4；Reranker 1；聊天 0/ : /Embedding 1；HTTP 3；Reranker 0；聊天 0/);
+    assert.ok(!summary.includes("<img"));
+  }
+  for (const failure of [null, {}, { message: "error", request_may_have_occurred: false, request_counts_scope: "completed_stages_only" },
+    { message: "error", request_may_have_occurred: true, request_counts_scope: "all_attempts" }]) {
+    const data = rerankFixture(); data.rerank_failure = failure;
+    assert.throws(() => helper.buildReport(data, TIMES));
+  }
+});
+
+test("malformed full pools, rerank coverage, identity, mapping, parameters, and request counts are rejected", () => {
+  const invalid = [
+    data => { delete data.rrf_pool; },
+    data => { delete data.rerank_comparison; },
+    data => { delete data.routes.reranker; },
+    data => { delete data.experiment_id; },
+    data => { data.experiment_id = ""; },
+    data => { data.mode = "bm25"; },
+    data => { data.rrf_pool.pop(); },
+    data => { data.rrf_pool[9].chunk_id = data.rrf_pool[8].chunk_id; },
+    data => { data.rrf_pool[9].chunk_id = "unknown"; },
+    data => { data.rrf_pool[9].rank = 9; },
+    data => { data.rrf_pool[9].score = Infinity; },
+    data => { data.routes.rrf[0] = { ...data.routes.rrf[0], score: 0 }; },
+    data => { data.routes.rrf.pop(); },
+    data => { data.routes.reranker.pop(); },
+    data => { data.routes.reranker[1].chunk_id = data.routes.reranker[0].chunk_id; },
+    data => { data.routes.reranker[0].chunk_id = "unseen"; },
+    data => { data.routes.reranker[0].rank = 2; },
+    data => { data.routes.reranker[0].score = NaN; },
+    data => { data.routes.reranker[0].input_index = 0; },
+    data => { data.routes.reranker[0].rrf_rank = 1; },
+    data => { data.routes.reranker[0].rank_change = -8; },
+    data => { data.rerank_comparison.input_order.reverse(); },
+    data => { data.rerank_comparison.candidate_count = 5; },
+    data => { data.rerank_comparison.final_k = 3; },
+    data => { data.rerank_comparison.model = ""; },
+    data => { delete data.rerank_comparison.notice; },
+    data => { data.rerank_comparison.request_counts.embedding = 1; },
+    data => { data.rerank_comparison.request_counts.http = 2; },
+    data => { data.rerank_comparison.request_counts.reranker = 0; },
+    data => { data.rerank_comparison.request_counts.chat = 1; },
+    data => { data.request_counts.reranker = 0; },
+  ];
+  for (const mutate of invalid) {
+    const data = rerankFixture();
+    mutate(data);
+    assert.throws(() => helper.buildReport(data, TIMES), undefined, mutate.toString());
+  }
+  const report = helper.buildReport(rerankFixture(), TIMES);
+  report.result.routes.reranker[0].rank_change = 0;
+  assert.throws(() => helper.summaryText(report));
 });
 
 test("download filename is generated exclusively from the canonical timestamp", () => {
@@ -231,16 +424,188 @@ function uiHarness() {
   assert.match(inline, /\ninit\(\);\s*$/);
   vm.createContext(sandbox);
   // Test the production handlers; only the unrelated automatic plan GET is omitted.
-  vm.runInContext(inline.replace(/\ninit\(\);\s*$/, "") + "\nglobalThis.ui={state,renderResults,clearResults,setBusy,hasExportResult,updateExportButtons,copySummary,downloadJson,compare};", sandbox, { filename: pagePath });
+  vm.runInContext(inline.replace(/\ninit\(\);\s*$/, "") + "\nglobalThis.ui={state,renderResults,clearResults,setBusy,hasExportResult,updateExportButtons,copySummary,downloadJson,compare,rerank,updateRerankControls,validateRerankData};", sandbox, { filename: pagePath });
   const element = id => document.getElementById(id);
   function ready(data = fixture()) {
-    sandbox.ui.state.plan = { document_count: 42 };
+    sandbox.ui.state.plan = { document_count: 42, reranker: { model: "synthetic-reranker-only", url: "https://example.invalid/synthetic-rerank", max_candidates: 16 } };
     element("query").value = data.query;
     sandbox.ui.renderResults(data);
     return data;
   }
   return { sandbox, ui: sandbox.ui, element, events, created, ready };
 }
+
+test("cloud rerank UI requires a matching completed hybrid experiment, consent, capacity, and idle state", async () => {
+  const { ui, element, events, ready } = uiHarness();
+  ready(fixture("bm25"));
+  element("rerank-consent").checked = true;
+  ui.updateRerankControls();
+  assert.equal(element("rerank-consent").disabled, true);
+  assert.equal(element("rerank-button").disabled, true);
+  await ui.rerank();
+  assert.equal(events.fetch.length, 0);
+  ready(beforeRerank());
+  assert.equal(element("rerank-consent").checked, false);
+  assert.equal(element("rerank-consent").disabled, false);
+  assert.equal(element("rerank-button").disabled, true);
+  await ui.rerank();
+  assert.equal(events.fetch.length, 0);
+  assert.match(element("rerank-plan").textContent, /共 13 块，全部参与云端重排/);
+  assert.match(element("rerank-disclosure").textContent, /https:\/\/example\.invalid\/synthetic-rerank/);
+  assert.match(element("rerank-disclosure").textContent, /不发送来源路径等元数据/);
+  element("rerank-consent").checked = true;
+  element("rerank-consent").listeners.change();
+  assert.equal(element("rerank-button").disabled, false);
+  ui.setBusy(true);
+  assert.equal(element("rerank-button").disabled, true);
+  assert.equal(element("rerank-consent").disabled, true);
+  await ui.rerank();
+  assert.equal(events.fetch.length, 0);
+  ui.setBusy(false);
+  ui.state.plan.reranker.max_candidates = 12;
+  ui.updateRerankControls();
+  assert.equal(element("rerank-button").disabled, true);
+  assert.match(element("rerank-button-help").textContent, /超过本轮上限 12/);
+  ui.state.plan.reranker.max_candidates = 16;
+  element("query").value = "different question";
+  ui.updateRerankControls();
+  await ui.rerank();
+  assert.equal(events.fetch.length, 0);
+});
+
+test("UI posts only experiment token once and preserves all 13 candidates while displaying Top-5", async () => {
+  const { ui, sandbox, element, events, ready } = uiHarness();
+  const completed = rerankFixture(13), original = ready(beforeRerank(completed));
+  const originalJson = JSON.stringify(original);
+  let resolveResponse;
+  sandbox.fetch = (...args) => {
+    events.fetch.push(args);
+    return new Promise(resolve => { resolveResponse = resolve; });
+  };
+  element("rerank-consent").checked = true;
+  ui.updateRerankControls();
+  const pending = ui.rerank();
+  assert.equal(ui.state.busy, true);
+  assert.equal(element("rerank-button").disabled, true);
+  assert.equal(element("copy-result").disabled, true);
+  await ui.rerank();
+  assert.equal(events.fetch.length, 1);
+  const [url, options] = events.fetch[0];
+  assert.equal(url, "/api/rerank");
+  assert.equal(options.method, "POST");
+  assert.equal(options.credentials, "same-origin");
+  assert.equal(options.cache, "no-store");
+  assert.equal(options.headers["X-Retrieval-Lab"], "1");
+  assert.deepEqual(JSON.parse(options.body), { experiment_id: original.experiment_id });
+  for (const privateText of [original.query, "metadata", "/Users/synthetic", "完整原文"])
+    assert.ok(!options.body.includes(privateText));
+  resolveResponse({ ok: true, json: async () => completed });
+  await pending;
+  assert.equal(JSON.stringify(original), originalJson);
+  assert.equal(ui.state.data.routes.reranker.length, 13);
+  assert.equal(ui.state.data.rrf_pool.length, 13);
+  assert.equal(element("rrf-before-list").children.length, 5);
+  assert.equal(element("reranker-list").children.length, 5);
+  assert.equal(element("rank-change-body").children.length, 13);
+  assert.match(element("ranking-detail-label").textContent, /全部 13 块/);
+  assert.match(element("rerank-summary").textContent, /同一 13 块/);
+  assert.equal(element("rerank-results").hidden, false);
+  assert.equal(element("rerank-button").disabled, true);
+  assert.equal(element("rerank-consent").disabled, true);
+  assert.equal(element("copy-result").disabled, false);
+  await ui.rerank();
+  await ui.copySummary();
+  ui.downloadJson();
+  assert.equal(events.fetch.length, 1); // Neither repeat click nor sharing re-runs any stage.
+  assert.match(events.clipboard[0], /完整两路去重并集13块/);
+  const report = JSON.parse(await events.blobs[0].text());
+  assert.equal(report.result.routes.reranker.length, 13);
+  assert.equal(report.result.rrf_pool.length, 13);
+});
+
+test("UI failure keeps original routes exportable and successful manual retry retains failed-request history", async () => {
+  const { ui, sandbox, element, events, ready } = uiHarness();
+  const completed = rerankFixture(13), original = ready(beforeRerank(completed));
+  const originalRoutes = JSON.stringify(original.routes), originalRecords = JSON.stringify(original.records);
+  sandbox.fetch = async (...args) => {
+    events.fetch.push(args);
+    return { ok: false, json: async () => ({ detail: "synthetic unavailable" }) };
+  };
+  element("rerank-consent").checked = true;
+  await ui.rerank();
+  assert.equal(events.fetch.length, 1); // No automatic retry.
+  assert.equal(JSON.stringify(ui.state.data.routes), originalRoutes);
+  assert.equal(JSON.stringify(ui.state.data.records), originalRecords);
+  assert.equal(ui.state.data.request_counts.http, 3);
+  assert.equal(ui.state.data.rerank_failure.request_may_have_occurred, true);
+  assert.equal(element("rerank-results").hidden, true);
+  assert.equal(element("rank-change-body").children.length, 0);
+  assert.equal(element("rerank-error").hidden, false);
+  assert.match(element("rerank-error").textContent, /不会自动重试/);
+  assert.equal(element("copy-result").disabled, false);
+  assert.equal(element("export-json").disabled, false);
+  await ui.copySummary();
+  assert.match(events.clipboard[0], /重排失败经历/);
+  assert.match(events.clipboard[0], /失败请求可能已发送/);
+  const failure = JSON.stringify(ui.state.data.rerank_failure);
+  assert.equal(element("rerank-button").disabled, false); // Human can explicitly choose to retry.
+  sandbox.fetch = async (...args) => { events.fetch.push(args); return { ok: true, json: async () => completed }; };
+  await ui.rerank();
+  assert.equal(events.fetch.length, 2);
+  assert.equal(ui.state.data.routes.reranker.length, 13);
+  assert.equal(JSON.stringify(ui.state.data.rerank_failure), failure);
+  assert.match(element("request-summary").textContent, /不含失败尝试/);
+  assert.match(element("rerank-status").textContent, /失败尝试可能已产生云端费用/);
+  await ui.copySummary();
+  ui.downloadJson();
+  assert.match(events.clipboard[1], /重排失败经历/);
+  assert.match(events.clipboard[1], /完成阶段累计/);
+  const report = JSON.parse(await events.blobs[0].text());
+  assert.equal(JSON.stringify(report.result.rerank_failure), failure);
+  assert.equal(report.result.request_counts.http, 4);
+  assert.equal(events.fetch.length, 2);
+  element("query").value = "新问题，不沿用旧实验";
+  element("query").listeners.input();
+  assert.equal(ui.state.data, null);
+  assert.equal(element("rerank-consent").checked, false);
+  assert.equal(element("rerank-button").disabled, true);
+  assert.equal(element("rerank-results").hidden, true);
+  assert.equal(element("copy-result").disabled, true);
+});
+
+test("UI validates fixed original candidates and rejects malformed rerank responses without partial display", async () => {
+  const { ui, sandbox, element, events, ready } = uiHarness();
+  const mutations = [
+    data => { data.query = "changed"; },
+    data => { data.experiment_id = "another-experiment"; },
+    data => { data.rrf_pool.reverse(); },
+    data => { data.records["chunk-1"].text = "changed original"; },
+    data => { data.routes.bm25[0].score = 999; },
+    data => { data.routes.reranker.pop(); },
+    data => { data.routes.reranker[0].chunk_id = data.routes.reranker[1].chunk_id; },
+    data => { data.routes.reranker[0].score = Infinity; },
+    data => { data.routes.reranker[0].input_index = 0; },
+    data => { data.routes.reranker[0].rrf_rank = 1; },
+    data => { data.routes.reranker[0].rank_change = -100; },
+    data => { data.rerank_comparison.input_order.reverse(); },
+    data => { data.rerank_comparison.request_counts.http = 2; },
+  ];
+  for (const mutate of mutations) {
+    const valid = rerankFixture(13), original = beforeRerank(valid), invalid = JSON.parse(JSON.stringify(valid));
+    mutate(invalid);
+    assert.throws(() => ui.validateRerankData(invalid, original), undefined, mutate.toString());
+  }
+  const original = ready(beforeRerank());
+  const invalid = rerankFixture(13); invalid.routes.reranker.pop();
+  sandbox.fetch = async (...args) => { events.fetch.push(args); return { ok: true, json: async () => invalid }; };
+  element("rerank-consent").checked = true;
+  await ui.rerank();
+  assert.equal(events.fetch.length, 1);
+  assert.equal(ui.state.data.routes, original.routes);
+  assert.equal(element("rerank-results").hidden, true);
+  assert.equal(element("rank-change-body").children.length, 0);
+  assert.equal(element("copy-result").disabled, false);
+});
 
 test("UI buttons follow completed/current/busy/cleared states and clear old notices on edits", async () => {
   const harness = uiHarness();
