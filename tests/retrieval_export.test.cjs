@@ -139,6 +139,43 @@ function beforeAnswer(completed = answerFixture()) {
   return data;
 }
 
+function quoteComparisonFixture({ answer = false, legacy = false } = {}) {
+  const data = answer ? answerFixture() : rerankFixture(13);
+  const ids = data.routes.reranker.slice(0, Math.min(5, data.top_k)).map(hit => hit.chunk_id), sources = {};
+  for (const [index, id] of ids.entries()) {
+    const paragraph = `🧪如果完整名称可解析但短名称不行，需要检查Pod中的\n/etc/resolv.conf 文件；合成来源${index + 1}。`;
+    const list = "- 核对名字空间与Service名称。\n  这里是同一列表项的补充说明。";
+    const code = "nslookup hostnames.default\nprintf '只展示，不执行'";
+    const text = `# 不作为引用的标题\n\n${paragraph}\n\n${list}\n\n\`\`\`shell\n${code}\n\`\`\`\n`;
+    data.records[id].text = text;
+    const baseline = [...paragraph.split("\n"), ...list.split("\n").map(line => line.trim()), ...code.split("\n")];
+    const baseline_quotes = Object.fromEntries(baseline.map((quote, position) => [`Q${position + 1}`, quote]));
+    const oldSpans = [];
+    let cursor = 0;
+    for (const [quoteId, quote] of Object.entries(baseline_quotes)) {
+      const found = text.indexOf(quote, cursor), start = Array.from(text.slice(0, found)).length;
+      oldSpans.push({ id: quoteId, start, end: start + Array.from(quote).length });
+      cursor = found + quote.length;
+    }
+    const active_quotes = {}, active_spans = {};
+    for (const [position, quote] of [paragraph, list, code].entries()) {
+      const quoteId = `Q${position + 1}`, start = Array.from(text.slice(0, text.indexOf(quote))).length, end = start + Array.from(quote).length;
+      active_quotes[quoteId] = quote;
+      active_spans[quoteId] = { start, end, kind: ["paragraph", "list", "code"][position], split: false,
+        baseline_ids: oldSpans.filter(old => old.start < end && old.end > start).map(old => old.id) };
+    }
+    sources[`S${index + 1}`] = { chunk_id: id, baseline_quotes, active_quotes, active_spans };
+    if (answer) Object.assign(data.answer_generation.sources[`S${index + 1}`], {
+      text, quotes: JSON.parse(JSON.stringify(legacy ? baseline_quotes : active_quotes)),
+    });
+  }
+  data.quote_comparison = { baseline_strategy: "line-v1", active_strategy: "paragraph-v1", max_quote_chars: 240,
+    evidence_ids: ids, sources, request_counts: { embedding: 0, http: 0, reranker: 0, chat: 0 },
+    notice: "同一原文、零模型预览；不是完整Markdown解析器或语义支持判定。" };
+  if (answer && !legacy) data.answer_generation.quote_strategy = "paragraph-v1";
+  return data;
+}
+
 function deepFreeze(value) {
   if (value && typeof value === "object") {
     Object.freeze(value);
@@ -428,6 +465,116 @@ test("answer evidence honors a smaller final Top-K and long citation previews ne
   assert.throws(() => helper.buildReport(data, TIMES));
 });
 
+test("quote comparison exports both complete versions with Unicode offsets, mappings and zero model requests", () => {
+  const data = deepFreeze(quoteComparisonFixture()), original = JSON.stringify(data);
+  const report = helper.buildReport(data, TIMES), summary = helper.summaryText(report);
+  assert.deepEqual(report.result.quote_comparison, data.quote_comparison);
+  assert.equal(JSON.stringify(data), original);
+  assert.deepEqual(report.result.request_counts, { embedding: 1, http: 4, reranker: 1, chat: 0 });
+  const source = report.result.quote_comparison.sources.S1;
+  assert.ok(source.active_quotes.Q1.includes("\n/etc/resolv.conf"));
+  assert.equal(source.active_quotes.Q1, Array.from(data.records[source.chunk_id].text).slice(source.active_spans.Q1.start, source.active_spans.Q1.end).join(""));
+  assert.deepEqual(source.active_spans.Q1.baseline_ids, ["Q1", "Q2"]);
+  assert.deepEqual(source.active_spans.Q2.baseline_ids, ["Q3", "Q4"]);
+  assert.deepEqual(source.active_spans.Q3.baseline_ids, ["Q5", "Q6"]);
+  assert.match(summary, /按行 → 按结构段落/);
+  assert.match(summary, /line-v1 → paragraph-v1/);
+  assert.match(summary, /预览新增模型请求：Embedding 0；HTTP 0；Reranker 0；聊天 0/);
+  assert.match(summary, /本机的预览POST不计入模型服务HTTP/);
+  assert.match(summary, /不把旧Q编号改读为新Q编号/);
+  assert.match(summary, /Q1、Q2/);
+  assert.match(summary, /↵ \/etc\/resolv\.conf/);
+  assert.match(summary, /Unicode码点\[start,end\)/);
+  assert.ok(!summary.includes("/Users/synthetic"));
+  const saved = JSON.parse(JSON.stringify(report));
+  assert.equal(saved.result.quote_comparison.sources.S1.active_quotes.Q1, source.active_quotes.Q1);
+});
+
+test("paragraph answers use exactly their active quotes while legacy answers retain their old Q identities", () => {
+  for (const legacy of [false, true]) {
+    const data = quoteComparisonFixture({ answer: true, legacy });
+    const report = helper.buildReport(deepFreeze(data), TIMES), summary = helper.summaryText(report);
+    assert.deepEqual(report.result.answer_generation.sources.S1.quotes, legacy
+      ? data.quote_comparison.sources.S1.baseline_quotes : data.quote_comparison.sources.S1.active_quotes);
+    assert.match(summary, legacy ? /回答引用策略：line-v1（旧报告，未重解释既有Q编号）/ : /回答引用策略：paragraph-v1/);
+    assert.match(summary, /HTTP 5；Reranker 1；聊天 1/);
+    assert.equal(report.result.answer_generation.sources.S1.quotes.Q1.includes("\n"), !legacy);
+  }
+  const noPreview = quoteComparisonFixture({ answer: true }); delete noPreview.quote_comparison;
+  assert.throws(() => helper.buildReport(noPreview, TIMES), /新版回答缺少引用策略对照/);
+  const wrongQuotes = quoteComparisonFixture({ answer: true });
+  wrongQuotes.answer_generation.sources.S1.quotes = wrongQuotes.quote_comparison.sources.S1.baseline_quotes;
+  assert.throws(() => helper.buildReport(wrongQuotes, TIMES), /精确采用paragraph-v1/);
+  const wrongStrategy = quoteComparisonFixture({ answer: true }); wrongStrategy.answer_generation.quote_strategy = "line-v1";
+  assert.throws(() => helper.buildReport(wrongStrategy, TIMES));
+});
+
+test("quote preview allows no quotable units and no old-line overlap without altering answer validation", () => {
+  const data = quoteComparisonFixture();
+  const first = data.quote_comparison.sources.S1;
+  first.baseline_quotes = {}; first.active_quotes = {}; first.active_spans = {};
+  const second = data.quote_comparison.sources.S2;
+  second.baseline_quotes = {};
+  for (const span of Object.values(second.active_spans)) span.baseline_ids = [];
+  const report = helper.buildReport(data, TIMES);
+  assert.match(helper.summaryText(report), /无可引用单位/);
+  assert.match(helper.summaryText(report), /无旧引用重叠/);
+  const answer = quoteComparisonFixture({ answer: true });
+  answer.quote_comparison.sources.S1.active_quotes = {}; answer.quote_comparison.sources.S1.active_spans = {};
+  answer.answer_generation.sources.S1.quotes = {};
+  assert.throws(() => helper.buildReport(answer, TIMES), /缺少原文片段/);
+});
+
+test("quote comparison rejects malformed schema, scope, source substrings, offsets, order and false old-Q mappings", () => {
+  const mutations = [
+    data => { delete data.routes.reranker; delete data.rerank_comparison; },
+    data => { data.quote_comparison = null; },
+    data => { data.quote_comparison.extra = true; },
+    data => { data.quote_comparison.baseline_strategy = "paragraph-v1"; },
+    data => { data.quote_comparison.active_strategy = "line-v1"; },
+    data => { data.quote_comparison.max_quote_chars = 300; },
+    data => { data.quote_comparison.evidence_ids.reverse(); },
+    data => { data.quote_comparison.evidence_ids.pop(); },
+    data => { data.quote_comparison.sources.S6 = data.quote_comparison.sources.S1; },
+    data => { delete data.quote_comparison.sources.S2; },
+    data => { data.quote_comparison.sources.S1.chunk_id = "chunk-1"; },
+    data => { data.quote_comparison.sources.S1.extra = true; },
+    data => { data.quote_comparison.sources.S1.baseline_quotes.Q1 = "虚构原文"; },
+    data => { data.quote_comparison.sources.S1.baseline_quotes.Q01 = data.quote_comparison.sources.S1.baseline_quotes.Q1; delete data.quote_comparison.sources.S1.baseline_quotes.Q1; },
+    data => { const quotes = data.quote_comparison.sources.S1.baseline_quotes; [quotes.Q1, quotes.Q2] = [quotes.Q2, quotes.Q1]; },
+    data => { data.quote_comparison.sources.S1.active_quotes.Q1 = "虚构原文"; },
+    data => { data.quote_comparison.sources.S1.active_quotes.Q1 = ""; },
+    data => { data.quote_comparison.sources.S1.active_quotes.Q4 = data.quote_comparison.sources.S1.active_quotes.Q1; },
+    data => { delete data.quote_comparison.sources.S1.active_spans.Q1; },
+    data => { data.quote_comparison.sources.S1.active_spans.Q1.start = -1; },
+    data => { data.quote_comparison.sources.S1.active_spans.Q1.start = 0.1; },
+    data => { data.quote_comparison.sources.S1.active_spans.Q1.end = 99999; },
+    data => { data.quote_comparison.sources.S1.active_spans.Q1.end++; }, // UTF-16 would count the emoji twice.
+    data => { data.quote_comparison.sources.S1.active_spans.Q1.kind = "sentence"; },
+    data => { data.quote_comparison.sources.S1.active_spans.Q1.split = "false"; },
+    data => { data.quote_comparison.sources.S1.active_spans.Q1.extra = true; },
+    data => { data.quote_comparison.sources.S1.active_spans.Q1.baseline_ids = ["Q999"]; },
+    data => { data.quote_comparison.sources.S1.active_spans.Q1.baseline_ids = ["Q3"]; },
+    data => { data.quote_comparison.sources.S1.active_spans.Q1.baseline_ids = ["Q1"]; },
+    data => { data.quote_comparison.sources.S1.active_spans.Q1.baseline_ids = ["Q1", "Q1", "Q2"]; },
+    data => { data.quote_comparison.request_counts.http = 1; },
+    data => { data.quote_comparison.request_counts.chat = 1; },
+    data => { delete data.quote_comparison.notice; },
+  ];
+  for (const mutate of mutations) {
+    const data = quoteComparisonFixture(); mutate(data);
+    assert.throws(() => helper.buildReport(data, TIMES), undefined, mutate.toString());
+  }
+  // New comparison limits do not retroactively reject old long-quote reports.
+  for (const mapName of ["baseline_quotes", "active_quotes"]) {
+    const data = quoteComparisonFixture(), source = data.quote_comparison.sources.S1;
+    const text = "🧪".repeat(241);
+    data.records[source.chunk_id].text = text;
+    source[mapName] = { Q1: text };
+    assert.throws(() => helper.buildReport(data, TIMES));
+  }
+});
+
 test("answer failure history remains exportable before and after a successful manual retry", () => {
   for (const completed of [false, true]) {
     const data = completed ? answerFixture() : beforeAnswer();
@@ -616,7 +763,7 @@ function uiHarness() {
   assert.match(inline, /\ninit\(\);\s*$/);
   vm.createContext(sandbox);
   // Test the production handlers; only the unrelated automatic plan GET is omitted.
-  vm.runInContext(inline.replace(/\ninit\(\);\s*$/, "") + "\nglobalThis.ui={state,renderResults,clearResults,setBusy,hasExportResult,updateExportButtons,copySummary,downloadJson,compare,rerank,updateRerankControls,validateRerankData,generateAnswer,updateAnswerControls,validateAnswerData,showAnswerSource,configureAnswerModels,renderAnswerEvidence};", sandbox, { filename: pagePath });
+  vm.runInContext(inline.replace(/\ninit\(\);\s*$/, "") + "\nglobalThis.ui={state,renderResults,clearResults,setBusy,hasExportResult,updateExportButtons,copySummary,downloadJson,compare,rerank,updateRerankControls,validateRerankData,generateAnswer,updateAnswerControls,validateAnswerData,showAnswerSource,configureAnswerModels,renderAnswerEvidence,renderAnswerResults,quotePreviewEnabled,quotePreviewSource,updateQuoteControls,clearQuoteComparison,validateQuoteComparisonData,renderQuoteComparison,selectQuoteSource,showQuoteOriginal,previewQuotes};", sandbox, { filename: pagePath });
   const element = id => document.getElementById(id);
   function ready(data = fixture()) {
     sandbox.ui.state.plan = { document_count: 42, reranker: { model: "synthetic-reranker-only", url: "https://example.invalid/synthetic-rerank", max_candidates: 16 }, answer: {
@@ -629,7 +776,12 @@ function uiHarness() {
     sandbox.ui.renderResults(data);
     return data;
   }
-  return { sandbox, ui: sandbox.ui, element, events, created, ready };
+  function enableQuotePreview() {
+    sandbox.ui.state.plan.answer.quote_strategy = "paragraph-v1";
+    sandbox.ui.state.plan.answer.quote_preview = { baseline_strategy: "line-v1", active_strategy: "paragraph-v1", max_quote_chars: 240 };
+    sandbox.ui.updateQuoteControls();
+  }
+  return { sandbox, ui: sandbox.ui, element, events, created, ready, enableQuotePreview };
 }
 
 test("cloud rerank UI requires a matching completed hybrid experiment, consent, capacity, and idle state", async () => {
@@ -1013,6 +1165,257 @@ test("late answer response cannot replace another experiment or expose a stale a
   assert.equal(element("answer-claims").children.length, 0);
   assert.equal(element("answer-consent").checked, false);
   assert.equal(events.fetch.length, 1);
+});
+
+test("quote preview UI requires the advertised plan, completed current rerank and idle state but no cloud consent", async () => {
+  const { ui, element, events, ready, enableQuotePreview } = uiHarness();
+  ready(rerankFixture(13));
+  assert.equal(ui.quotePreviewEnabled(), false);
+  assert.equal(element("quote-preview-button").disabled, true);
+  await ui.previewQuotes();
+  assert.equal(events.fetch.length, 0);
+  for (const data of [fixture("bm25"), beforeRerank()]) {
+    ready(data); enableQuotePreview();
+    assert.equal(element("quote-preview-button").disabled, true);
+    await ui.previewQuotes();
+  }
+  ready(rerankFixture(13)); enableQuotePreview();
+  assert.equal(element("answer-consent").checked, false);
+  assert.equal(element("quote-preview-button").disabled, false);
+  ui.setBusy(true);
+  assert.equal(element("quote-preview-button").disabled, true);
+  await ui.previewQuotes();
+  ui.setBusy(false);
+  element("query").value = "new question";
+  ui.updateQuoteControls();
+  assert.equal(element("quote-preview-button").disabled, true);
+  await ui.previewQuotes();
+  assert.equal(events.fetch.length, 0);
+});
+
+test("quote preview posts only experiment token, retains pre-generation choices and can be reopened with zero extra fetch", async () => {
+  const { ui, sandbox, element, events, ready, enableQuotePreview } = uiHarness();
+  const completed = quoteComparisonFixture(), original = JSON.parse(JSON.stringify(completed)); delete original.quote_comparison;
+  ready(original); enableQuotePreview();
+  element("answer-model").value = "synthetic-glm-http";
+  element("answer-model").listeners.change();
+  element("answer-consent").checked = true;
+  ui.updateAnswerControls();
+  const selected = ui.state.selected, routes = JSON.stringify(original.routes), records = JSON.stringify(original.records), originalJson = JSON.stringify(original);
+  let resolveResponse;
+  sandbox.fetch = (...args) => { events.fetch.push(args); return new Promise(resolve => { resolveResponse = resolve; }); };
+  const pending = ui.previewQuotes();
+  assert.equal(ui.state.busy, true);
+  assert.equal(element("quote-preview-button").disabled, true);
+  await ui.previewQuotes();
+  assert.equal(events.fetch.length, 1);
+  const [url, options] = events.fetch[0];
+  assert.equal(url, "/api/quotes");
+  assert.equal(options.method, "POST");
+  assert.equal(options.credentials, "same-origin");
+  assert.equal(options.cache, "no-store");
+  assert.equal(options.headers["X-Retrieval-Lab"], "1");
+  assert.deepEqual(JSON.parse(options.body), { experiment_id: original.experiment_id });
+  for (const text of [original.query, "metadata", "完整原文", "/Users/", "api_key", "quotes", "model"])
+    assert.ok(!options.body.includes(text));
+  resolveResponse({ ok: true, json: async () => completed });
+  await pending;
+  assert.equal(JSON.stringify(original), originalJson);
+  assert.equal(JSON.stringify(ui.state.data.routes), routes);
+  assert.equal(JSON.stringify(ui.state.data.records), records);
+  assert.equal(ui.state.selected, selected);
+  assert.equal(ui.state.answerModel, "synthetic-glm-http");
+  assert.equal(element("answer-model").value, "synthetic-glm-http");
+  assert.equal(element("answer-consent").checked, true);
+  assert.equal(element("answer-button").disabled, false);
+  assert.equal(element("quote-results").hidden, false);
+  assert.equal(element("quote-baseline-list").children.length, 4);
+  assert.equal(element("quote-baseline-more-list").children.length, 2);
+  assert.equal(element("quote-active-list").children.length, 3);
+  assert.equal(element("quote-active-list").children[0].children[1].textContent, completed.quote_comparison.sources.S1.active_quotes.Q1);
+  assert.match(element("quote-status").textContent, /本阶段 Embedding \/ 模型服务 HTTP \/ Reranker \/ 聊天均为 0/);
+  assert.deepEqual(ui.state.data.request_counts, original.request_counts);
+  ui.showQuoteOriginal("S1", "Q1");
+  assert.equal(element("quote-original-quote").textContent, completed.quote_comparison.sources.S1.active_quotes.Q1);
+  assert.equal(element("quote-original-text").textContent, completed.records[completed.quote_comparison.sources.S1.chunk_id].text);
+  assert.match(element("quote-original-label").textContent, /Unicode 码点位置/);
+  assert.equal(ui.state.selected, selected); // Reading a quote never changes retrieval selection.
+  element("quote-source-select").value = "S2";
+  element("quote-source-select").listeners.change();
+  assert.equal(ui.state.quoteSource, "S2");
+  await ui.previewQuotes();
+  await ui.copySummary(); ui.downloadJson();
+  assert.equal(events.fetch.length, 1);
+  assert.match(events.clipboard[0], /本地预览新增模型请求：Embedding 0；HTTP 0/);
+  const saved = JSON.parse(await events.blobs[0].text()).result;
+  assert.deepEqual(saved.quote_comparison, completed.quote_comparison);
+  assert.deepEqual(saved.request_counts, original.request_counts);
+});
+
+test("preview after an old answer preserves its exact answer, reference view, model and prior failures", async () => {
+  const { ui, sandbox, element, events, ready, enableQuotePreview } = uiHarness();
+  const completed = quoteComparisonFixture({ answer: true, legacy: true });
+  const original = JSON.parse(JSON.stringify(completed)); delete original.quote_comparison;
+  original.answer_failure = { message: "earlier answer failed", request_may_have_occurred: true, request_counts_scope: "completed_stages_only" };
+  original.rerank_failure = { message: "earlier rerank failed", request_may_have_occurred: true, request_counts_scope: "completed_stages_only" };
+  ready(original); enableQuotePreview(); ui.renderAnswerResults();
+  ui.showAnswerSource("S1", "Q1");
+  const selected = ui.state.selected, answerJson = JSON.stringify(original.answer_generation), claimNode = element("answer-claims").children[0];
+  const oldQuote = element("answer-quote").textContent;
+  sandbox.fetch = async (...args) => { events.fetch.push(args); return { ok: true, json: async () => completed }; };
+  await ui.previewQuotes();
+  assert.equal(JSON.stringify(ui.state.data.answer_generation), answerJson);
+  assert.equal(element("answer-claims").children[0], claimNode); // No answer re-render.
+  assert.equal(element("answer-source-view").hidden, false);
+  assert.equal(element("answer-quote").textContent, oldQuote);
+  assert.equal(ui.state.selected, selected);
+  assert.equal(ui.state.answerModel, "synthetic-chat-only");
+  assert.equal(ui.state.data.answer_failure.message, "earlier answer failed");
+  assert.equal(ui.state.data.rerank_failure.message, "earlier rerank failed");
+  assert.deepEqual(ui.state.data.request_counts, { embedding: 1, http: 5, reranker: 1, chat: 1 });
+  assert.equal(element("answer-button").disabled, true);
+  await ui.copySummary();
+  assert.match(events.clipboard[0], /旧报告，未重解释既有Q编号/);
+  assert.equal(events.fetch.length, 1);
+});
+
+test("quote preview handles empty reference sets without trying a model or inventing quote identities", async () => {
+  const { ui, sandbox, element, events, ready, enableQuotePreview } = uiHarness();
+  const completed = quoteComparisonFixture(), source = completed.quote_comparison.sources.S1;
+  source.baseline_quotes = {}; source.active_quotes = {}; source.active_spans = {};
+  const original = JSON.parse(JSON.stringify(completed)); delete original.quote_comparison;
+  ready(original); enableQuotePreview();
+  sandbox.fetch = async (...args) => { events.fetch.push(args); return { ok: true, json: async () => completed }; };
+  await ui.previewQuotes();
+  assert.equal(element("quote-baseline-empty").hidden, false);
+  assert.equal(element("quote-active-empty").hidden, false);
+  assert.equal(element("quote-original-view").hidden, true);
+  assert.equal(ui.state.quoteUnit, null);
+  assert.equal(element("quote-active-list").children.length, 0);
+  assert.deepEqual(ui.state.data.request_counts, original.request_counts);
+  assert.equal(events.fetch.length, 1);
+});
+
+test("local preview failure leaves answer and counts untouched, records no paid-failure history, and never auto-retries", async () => {
+  const { ui, sandbox, element, events, ready, enableQuotePreview } = uiHarness();
+  const completed = quoteComparisonFixture({ answer: true, legacy: true }), original = JSON.parse(JSON.stringify(completed)); delete original.quote_comparison;
+  ready(original); enableQuotePreview(); ui.renderAnswerResults();
+  const answerNode = element("answer-claims").children[0], originalJson = JSON.stringify(original);
+  sandbox.fetch = async (...args) => { events.fetch.push(args); return { ok: false, json: async () => ({ detail: "synthetic local preview failed" }) }; };
+  await ui.previewQuotes();
+  assert.equal(JSON.stringify(ui.state.data), originalJson);
+  assert.equal(ui.state.data.answer_failure, undefined);
+  assert.equal(ui.state.data.rerank_failure, undefined);
+  assert.equal(element("answer-claims").children[0], answerNode);
+  assert.equal(element("answer-result").hidden, false);
+  assert.equal(element("quote-error").hidden, false);
+  assert.match(element("quote-status").textContent, /没有新增模型服务请求/);
+  assert.equal(element("quote-preview-button").disabled, false);
+  assert.equal(events.fetch.length, 1);
+  await ui.copySummary(); ui.downloadJson();
+  assert.equal(events.fetch.length, 1);
+  assert.ok(!events.clipboard[0].includes("回答生成失败经历"));
+  sandbox.fetch = async (...args) => { events.fetch.push(args); return { ok: true, json: async () => completed }; };
+  await ui.previewQuotes();
+  assert.equal(events.fetch.length, 2);
+  assert.equal(element("quote-error").hidden, true);
+  assert.deepEqual(ui.state.data.request_counts, original.request_counts);
+});
+
+test("preview UI rejects changed answer or model counts and malformed quotes before showing any comparison", async () => {
+  const { ui, sandbox, element, events, ready, enableQuotePreview } = uiHarness();
+  const completed = quoteComparisonFixture({ answer: true, legacy: true }), original = JSON.parse(JSON.stringify(completed)); delete original.quote_comparison;
+  const mutations = [
+    data => { data.answer_generation.answer.claims[0].text = "changed answer"; },
+    data => { data.answer_generation.sources.S1.quotes = data.quote_comparison.sources.S1.active_quotes; },
+    data => { data.request_counts.http++; },
+    data => { data.query = "other query"; },
+    data => { data.experiment_id = "other-experiment"; },
+    data => { data.records["chunk-1"].text = "changed original"; },
+    data => { data.quote_comparison.sources.S1.active_spans.Q1.end++; },
+    data => { data.quote_comparison.sources.S1.active_spans.Q1.baseline_ids = ["Q99"]; },
+  ];
+  for (const mutate of mutations) {
+    const invalid = JSON.parse(JSON.stringify(completed)); mutate(invalid);
+    assert.throws(() => ui.validateQuoteComparisonData(invalid, original), undefined, mutate.toString());
+  }
+  ready(original); enableQuotePreview(); ui.renderAnswerResults();
+  const invalid = JSON.parse(JSON.stringify(completed)); invalid.quote_comparison.sources.S1.active_spans.Q1.end++;
+  sandbox.fetch = async (...args) => { events.fetch.push(args); return { ok: true, json: async () => invalid }; };
+  await ui.previewQuotes();
+  assert.equal(ui.state.data, original);
+  assert.equal(element("quote-results").hidden, true);
+  assert.equal(element("answer-result").hidden, false);
+  assert.equal(events.fetch.length, 1);
+});
+
+test("new question clears quote comparison and late preview response cannot replace another experiment", async () => {
+  const { ui, sandbox, element, events, ready, enableQuotePreview } = uiHarness();
+  const completed = quoteComparisonFixture(), original = JSON.parse(JSON.stringify(completed)); delete original.quote_comparison;
+  ready(original); enableQuotePreview();
+  let resolveResponse;
+  sandbox.fetch = (...args) => { events.fetch.push(args); return new Promise(resolve => { resolveResponse = resolve; }); };
+  const pending = ui.previewQuotes();
+  ui.state.sequence++; ui.setBusy(false); ui.clearResults();
+  const next = fixture("bm25"); next.query = "another experiment"; ready(next); enableQuotePreview();
+  resolveResponse({ ok: true, json: async () => completed });
+  await pending;
+  assert.equal(ui.state.data, next);
+  assert.equal(element("quote-results").hidden, true);
+  assert.equal(element("quote-active-list").children.length, 0);
+  assert.equal(ui.state.quoteSource, null);
+  assert.equal(element("quote-preview-button").disabled, true);
+  ready(completed); enableQuotePreview(); ui.renderQuoteComparison();
+  element("query").value = "clear old quote identity";
+  element("query").listeners.input();
+  assert.equal(ui.state.data, null);
+  assert.equal(ui.state.quoteSource, null);
+  assert.equal(ui.state.quoteUnit, null);
+  assert.equal(element("quote-results").hidden, true);
+  assert.equal(element("quote-original-view").hidden, true);
+  assert.equal(events.fetch.length, 1);
+});
+
+test("paragraph answer uses the previewed Q units, validates strategy and renders comparison without an extra preview request", async () => {
+  const { ui, sandbox, element, events, ready, enableQuotePreview } = uiHarness();
+  const completed = quoteComparisonFixture({ answer: true }), original = beforeAnswer(completed);
+  ready(original); enableQuotePreview(); ui.renderQuoteComparison();
+  assert.doesNotThrow(() => ui.validateAnswerData(completed, original, "synthetic-chat-only"));
+  const legacy = JSON.parse(JSON.stringify(completed)); delete legacy.answer_generation.quote_strategy;
+  assert.throws(() => ui.validateAnswerData(legacy, original, "synthetic-chat-only"));
+  const missingPreview = JSON.parse(JSON.stringify(completed)); delete missingPreview.quote_comparison;
+  assert.throws(() => ui.validateAnswerData(missingPreview, original, "synthetic-chat-only"));
+  const wrongQuotes = JSON.parse(JSON.stringify(completed)); wrongQuotes.answer_generation.sources.S1.quotes = wrongQuotes.quote_comparison.sources.S1.baseline_quotes;
+  assert.throws(() => ui.validateAnswerData(wrongQuotes, original, "synthetic-chat-only"));
+  const changedPreview = JSON.parse(JSON.stringify(completed)); changedPreview.quote_comparison.notice = "Different preview contract";
+  assert.throws(() => ui.validateAnswerData(changedPreview, original, "synthetic-chat-only"));
+  element("answer-consent").checked = true;
+  sandbox.fetch = async (...args) => { events.fetch.push(args); return { ok: true, json: async () => completed }; };
+  await ui.generateAnswer();
+  assert.equal(element("answer-result").hidden, false);
+  assert.equal(element("quote-results").hidden, false);
+  assert.match(element("answer-summary").textContent, /paragraph-v1/);
+  ui.showAnswerSource("S1", "Q1");
+  assert.equal(element("answer-quote").textContent, element("quote-original-quote").textContent);
+  await ui.previewQuotes();
+  assert.equal(events.fetch.length, 1);
+  assert.equal(events.fetch[0][0], "/api/answer");
+  assert.deepEqual(ui.state.data.quote_comparison, original.quote_comparison);
+  assert.deepEqual(ui.state.data.request_counts, { embedding: 1, http: 5, reranker: 1, chat: 1 });
+});
+
+test("paragraph generation can directly supply the comparison without requiring a prior preview POST", async () => {
+  const { ui, sandbox, element, events, ready, enableQuotePreview } = uiHarness();
+  const completed = quoteComparisonFixture({ answer: true }), original = beforeAnswer(completed); delete original.quote_comparison;
+  ready(original); enableQuotePreview();
+  element("answer-consent").checked = true;
+  sandbox.fetch = async (...args) => { events.fetch.push(args); return { ok: true, json: async () => completed }; };
+  await ui.generateAnswer();
+  assert.equal(element("answer-result").hidden, false);
+  assert.equal(element("quote-results").hidden, false);
+  assert.equal(events.fetch.length, 1);
+  assert.equal(events.fetch[0][0], "/api/answer");
+  assert.deepEqual(ui.state.data.answer_generation.sources.S1.quotes, ui.state.data.quote_comparison.sources.S1.active_quotes);
 });
 
 test("UI buttons follow completed/current/busy/cleared states and clear old notices on edits", async () => {

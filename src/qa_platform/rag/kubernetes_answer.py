@@ -10,6 +10,9 @@ from openai import OpenAI
 from qa_platform.ingestion.embedding_plan import require
 from qa_platform.providers.chat import DEFAULT_MODEL, MODEL_CONFIGS
 from qa_platform.rag.answering import build_quotes, generate_answer
+from qa_platform.rag.quote_units import (
+    LINE_STRATEGY, MAX_QUOTE_CHARS, PARAGRAPH_STRATEGY, paragraph_units,
+)
 from qa_platform.retrieval.hybrid import RRFHit
 from qa_platform.retrieval.kubernetes_rerank import load_api_key, validate_pool
 from qa_platform.retrieval.pipeline import RerankedHit
@@ -23,6 +26,14 @@ NOTICE = (
     "先收集完整输出，再检查JSON结构、引用编号和原文定位；这不等于已证明每个推断受原文支持。"
     "资料仍未审核，版本可能未知；示例名称、IP和输出不是现场值；命令仅作文字说明，不会执行。"
     "单次生成可能收费，不自动重试；证据不足时应拒答或仅作部分回答。"
+    "本轮引用使用paragraph-v1，保留段落内部原始换行；旧报告编号不会被重新解释。"
+)
+QUOTE_NOTICE = (
+    "同一正文对照line-v1按行与paragraph-v1按结构段落；只改引用单位，不改变原文、向量或检索排名。"
+    "保留内部原始换行，位置按Unicode码点[start,end)计；单单位最多240字符，短于6字符不单独引用。"
+    "段落、列表项、代码块分开，长单位仍可能被切分并标记，规则不能保证语义完整。"
+    "不跨chunk补上下文，不请求模型、不读密钥；本机预览HTTP不计入模型服务HTTP。"
+    "新旧Q编号各自独立；引用存在不等于它已充分支持回答。"
 )
 SYSTEM_SUFFIX = """
 8. 本轮是Kubernetes文档学习问答，不是已确认的生产故障。文档快照不等于适用当前集群版本；
@@ -51,6 +62,11 @@ def describe() -> dict:
             for model, config in MODEL_CONFIGS.items()
         ],
         "max_sources": MAX_SOURCES, "max_tokens": MAX_TOKENS, "notice": NOTICE,
+        "quote_strategy": PARAGRAPH_STRATEGY,
+        "quote_preview": {
+            "baseline_strategy": LINE_STRATEGY, "active_strategy": PARAGRAPH_STRATEGY,
+            "max_quote_chars": MAX_QUOTE_CHARS, "notice": QUOTE_NOTICE,
+        },
     }
 
 
@@ -93,6 +109,7 @@ def _sources(result: dict) -> dict[str, RerankedHit]:
         require(metadata.get("chunk_id") == hit["chunk_id"], "证据元数据身份不一致")
         # 仅为旧接口添加局部适配标志，原records与输出来源元数据保持原样。
         metadata["document_mode"] = "body-only"
+        metadata["quote_strategy"] = PARAGRAPH_STRATEGY
         metadata.setdefault("is_test", False)
         require(type(metadata["is_test"]) is bool, "测试标记无效")
         document = Document(page_content=row["text"], metadata=metadata)
@@ -120,6 +137,54 @@ def prepare_evidence(result: dict) -> dict:
     return _evidence(result, _sources(result))
 
 
+def prepare_quote_comparison(result: dict) -> dict:
+    """零模型对照；已生成回答也可查看，不修改其既有引用或版本。"""
+    base = {key: value for key, value in result.items() if key != "answer_generation"}
+    base["request_counts"] = {**result["request_counts"], "chat": 0}
+    sources = _sources(base)
+    compared = {}
+    for source_id, hit in sources.items():
+        text = hit.candidate.document.page_content
+        old_hit = deepcopy(hit)
+        old_hit.candidate.document.metadata["quote_strategy"] = LINE_STRATEGY
+        try:
+            baseline = build_quotes(old_hit)
+        except ValueError:
+            # 多条短行合起来可能达到引用长度，旧规则也可能一条都没有。
+            baseline = {}
+        old_spans, cursor = {}, 0
+        for quote_id, quote in baseline.items():
+            start = text.find(quote, cursor)
+            require(start >= 0, "旧引用无法按顺序定位")
+            old_spans[quote_id] = (start, start + len(quote))
+            cursor = start + len(quote)
+        units = paragraph_units(text)
+        active_quotes, active_spans = {}, {}
+        for index, unit in enumerate(units, 1):
+            quote_id = f"Q{index}"
+            active_quotes[quote_id] = unit["text"]
+            active_spans[quote_id] = {
+                key: unit[key] for key in ("start", "end", "kind", "split")
+            }
+            active_spans[quote_id]["baseline_ids"] = [
+                old_id for old_id, (start, end) in old_spans.items()
+                if start < unit["end"] and end > unit["start"]
+            ]
+        compared[source_id] = {
+            "chunk_id": hit.candidate.document.metadata["chunk_id"],
+            "baseline_quotes": baseline, "active_quotes": active_quotes,
+            "active_spans": active_spans,
+        }
+    return {
+        "baseline_strategy": LINE_STRATEGY, "active_strategy": PARAGRAPH_STRATEGY,
+        "max_quote_chars": MAX_QUOTE_CHARS,
+        "evidence_ids": [row["chunk_id"] for row in compared.values()],
+        "sources": compared,
+        "request_counts": {"embedding": 0, "http": 0, "reranker": 0, "chat": 0},
+        "notice": QUOTE_NOTICE,
+    }
+
+
 def generate(
     result: dict, model: str = DEFAULT_MODEL, *, client_factory=None,
     http_client_factory=None, api_key_loader=None,
@@ -127,6 +192,7 @@ def generate(
     require(model in MODEL_CONFIGS, "回答模型不在允许列表")
     sources = _sources(result)
     evidence = _evidence(result, sources)  # 引用可构造性也须在读取密钥前检查。
+    comparison = prepare_quote_comparison(result)
     key = (api_key_loader or load_chat_key)(model)
     require(isinstance(key, str) and bool(key.strip()), "回答服务认证未就绪")
     config = MODEL_CONFIGS[model]
@@ -145,8 +211,9 @@ def generate(
                 system_suffix=SYSTEM_SUFFIX,
             )
     output = deepcopy(result)
+    output["quote_comparison"] = comparison
     output["answer_generation"] = {
-        "model": model, "max_tokens": MAX_TOKENS,
+        "model": model, "max_tokens": MAX_TOKENS, "quote_strategy": PARAGRAPH_STRATEGY,
         "evidence_ids": [row["chunk_id"] for row in evidence.values()],
         "sources": evidence, "answer": answer.model_dump(),
         "request_counts": {"embedding": 0, "http": 1, "reranker": 0, "chat": 1},

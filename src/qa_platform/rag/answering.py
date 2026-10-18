@@ -255,6 +255,10 @@ def build_quotes(hit: RerankedHit) -> dict[str, str]:
     content = hit.candidate.document.page_content
     # 当前分块器用双换行分隔补充标题和正文；不把章节标题当作原文依据。
     body_only = hit.candidate.document.metadata.get("document_mode") == "body-only"
+    if body_only and hit.candidate.document.metadata.get("quote_strategy") == "paragraph-v1":
+        from qa_platform.rag.quote_units import paragraph_quotes
+
+        return paragraph_quotes(content)
     if body_only:
         # Kubernetes已是正文，第一段不能按旧铁路的“补充标题”规则丢掉。
         body = content

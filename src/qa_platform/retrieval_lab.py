@@ -207,6 +207,38 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
         finally:
             busy.release()
 
+    @app.post("/api/quotes")
+    async def quote_preview(request: Request):
+        nonlocal snapshot
+        payload = await read_payload(
+            request, RerankRequest, "只接受当前experiment_id；引用预览不接受正文、地址或模型参数。",
+        )
+        if not payload.experiment_id.strip():
+            raise HTTPException(422, "experiment_id不能为空")
+        if not busy.acquire(blocking=False):
+            raise HTTPException(409, "当前有操作正在执行，请等待；预览不会调用模型。")
+        try:
+            if snapshot is None or snapshot["experiment_id"] != payload.experiment_id:
+                raise HTTPException(409, "实验已失效，请重新检索并重排；未调用模型。")
+            if "reranker" not in snapshot["routes"]:
+                raise HTTPException(409, "请先完成本轮重排；引用预览未调用模型。")
+            if "quote_comparison" not in snapshot:
+                comparison = await run_in_threadpool(
+                    answering.prepare_quote_comparison, deepcopy(snapshot),
+                )
+                updated = deepcopy(snapshot)
+                updated["quote_comparison"] = comparison
+                snapshot = updated
+            # 已有回答也只增加对照，不重新生成或改写旧引用编号。
+            return deepcopy(snapshot)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            print(f"[引用预览未完成] {type(exc).__name__}；零模型请求。", flush=True)
+            raise HTTPException(503, "本地引用预览未完成，已有结果保留；未读取密钥、未调用模型。") from None
+        finally:
+            busy.release()
+
     return app
 
 
@@ -222,6 +254,7 @@ def main() -> int:
     print("[计划] 打开页面0模型；仅BM25=0；三路对照=1次本地问题Embedding+2次身份GET。")
     print("[重排] 三路完成后可主动点击：固定同一并集，读密钥并向云端发送问题与正文，增加1次HTTP；可能收费。")
     print("[回答] 重排完成后另行确认：选前5块生成带引用的回答，增加1次HTTP；可选既有千问或GLM，GLM地址为HTTP明文。")
+    print("[引用] 可单独预览按行/按段对照；只在本机计算，新增模型请求为0，不改原文或向量。")
     print("[边界] 打开页面/普通检索不读.env、不请求云端；不重编码文档、不执行命令、不写报告，无自动重试。")
     uvicorn.run(create_app(), host="127.0.0.1", port=args.port, access_log=False)
     return 0

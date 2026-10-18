@@ -41,13 +41,71 @@
       Array.from(text).length <= maximum && !/[\u0000-\u001f\u007f]/.test(text) && !/\[S[0-9]+\]/.test(text),
     "回答自由文本超长、为空、含控制字符或混入引用编号");
   }
+  function quoteEntries(quotes, text, maximum) {
+    requireValue(isObject(quotes), "引用对照缺少原文单位映射");
+    const entries = Object.entries(quotes);
+    requireValue(entries.every(([id, quote], index) => id === `Q${index + 1}` &&
+      typeof quote === "string" && quote.length > 0 && Array.from(quote).length <= maximum && text.includes(quote)),
+    "引用对照编号、长度或原文连续子串非法");
+    return entries;
+  }
+  function validateQuoteComparison(result) {
+    requireValue(result.mode === "hybrid" && own(result.routes, "reranker") && own(result, "rerank_comparison"),
+      "引用对照必须以当前完整重排结果为基础");
+    const comparison = result.quote_comparison;
+    requireValue(exactKeys(comparison, ["baseline_strategy", "active_strategy", "max_quote_chars", "evidence_ids", "sources", "request_counts", "notice"]) &&
+      comparison.baseline_strategy === "line-v1" && comparison.active_strategy === "paragraph-v1" &&
+      comparison.max_quote_chars === 240 && typeof comparison.notice === "string", "引用对照策略或结构非法");
+    const ids = result.routes.reranker.slice(0, Math.min(5, result.top_k)).map(hit => hit.chunk_id);
+    requireValue(ids.length > 0 && sameJson(comparison.evidence_ids, ids), "引用对照必须精确覆盖本轮重排前5块");
+    const sourceIds = ids.map((id, index) => `S${index + 1}`);
+    requireValue(exactKeys(comparison.sources, sourceIds), "引用对照来源编号不完整或非法");
+    for (const [index, sourceId] of sourceIds.entries()) {
+      const source = comparison.sources[sourceId], text = result.records[ids[index]].text;
+      requireValue(exactKeys(source, ["chunk_id", "baseline_quotes", "active_quotes", "active_spans"]) && source.chunk_id === ids[index],
+        "引用对照来源与当前证据不一致");
+      const baseline = quoteEntries(source.baseline_quotes, text, comparison.max_quote_chars);
+      const active = quoteEntries(source.active_quotes, text, comparison.max_quote_chars);
+      requireValue(exactKeys(source.active_spans, active.map(([id]) => id)), "引用对照定位范围不完整");
+      // 旧规则无offset；按其原始Q顺序向后定位，不能把重复句误配到前一次出现。
+      let cursor = 0;
+      const baselineSpans = baseline.map(([id, quote]) => {
+        const found = text.indexOf(quote, cursor);
+        requireValue(found >= 0, "旧引用无法按顺序定位到原文");
+        const start = Array.from(text.slice(0, found)).length;
+        cursor = found + quote.length;
+        return { id, start, end: start + Array.from(quote).length };
+      });
+      const codepoints = Array.from(text);
+      let previousEnd = 0;
+      for (const [id, quote] of active) {
+        const span = source.active_spans[id];
+        requireValue(exactKeys(span, ["start", "end", "kind", "split", "baseline_ids"]) &&
+          Number.isInteger(span.start) && Number.isInteger(span.end) && span.start >= previousEnd &&
+          span.start >= 0 && span.end > span.start && span.end <= codepoints.length &&
+          codepoints.slice(span.start, span.end).join("") === quote &&
+          ["paragraph", "list", "code"].includes(span.kind) && typeof span.split === "boolean",
+        "引用对照原文offset、顺序、单位类型或拆分标记非法");
+        const overlap = baselineSpans.filter(old => old.start < span.end && old.end > span.start).map(old => old.id);
+        requireValue(sameJson(span.baseline_ids, overlap), "新旧引用映射必须对应真正重叠的原文范围");
+        previousEnd = span.end;
+      }
+    }
+    validateCounts(comparison.request_counts);
+    requireValue(sameJson(comparison.request_counts, { embedding: 0, http: 0, reranker: 0, chat: 0 }),
+      "引用预览不得新增模型服务请求");
+  }
   function validateAnswer(result) {
     requireValue(result.mode === "hybrid" && own(result.routes, "reranker") && own(result, "rerank_comparison"),
       "回答必须以完整重排结果为基础");
     const generation = result.answer_generation;
-    requireValue(exactKeys(generation, ["model", "max_tokens", "evidence_ids", "sources", "answer", "request_counts", "notice"]) &&
+    const generationKeys = ["model", "max_tokens", "evidence_ids", "sources", "answer", "request_counts", "notice"];
+    const paragraph = isObject(generation) && own(generation, "quote_strategy");
+    requireValue(exactKeys(generation, paragraph ? [...generationKeys, "quote_strategy"] : generationKeys) &&
+      (!paragraph || generation.quote_strategy === "paragraph-v1") &&
       typeof generation.model === "string" && generation.model.trim() && generation.max_tokens === 4096 && typeof generation.notice === "string",
     "回答生成合同、模型或输出额度非法");
+    requireValue(!paragraph || own(result, "quote_comparison"), "新版回答缺少引用策略对照");
     const ids = result.routes.reranker.slice(0, Math.min(5, result.top_k)).map(hit => hit.chunk_id);
     requireValue(ids.length > 0 && sameJson(generation.evidence_ids, ids), "回答证据必须精确对应本轮重排前5块");
     const sourceIds = ids.map((id, index) => `S${index + 1}`);
@@ -62,6 +120,8 @@
       requireValue(quoteIds.every((id, position) => own(source.quotes, `Q${position + 1}`)) &&
         quoteIds.every(id => /^Q[1-9][0-9]*$/.test(id) && typeof source.quotes[id] === "string" &&
           source.quotes[id].length > 0 && source.text.includes(source.quotes[id])), "回答原文片段编号非法或无法定位到连续原文");
+      requireValue(!paragraph || sameJson(source.quotes, result.quote_comparison.sources[sourceId].active_quotes),
+        "新版回答引用必须精确采用paragraph-v1原文单位");
     }
     const answer = generation.answer;
     requireValue(exactKeys(answer, ["status", "claims", "missing_info"]) &&
@@ -157,6 +217,7 @@
         failure.request_may_have_occurred === true && failure.request_counts_scope === "completed_stages_only",
       "回答失败经历或请求计数口径非法");
     }
+    if (own(result, "quote_comparison")) validateQuoteComparison(result);
     if (own(result, "answer_generation")) validateAnswer(result);
   }
 
@@ -266,11 +327,36 @@
       lines.push("", `重排说明：${cell(comparison.notice)}`,
         "重排边界：Reranker与BM25、余弦、RRF原始分数不可混加；重排分数不是概率或正确率；重排不能找回两路都未召回的文本。");
     }
+    if (data.quote_comparison) {
+      const comparison = data.quote_comparison;
+      const quoteCell = quote => cell(quote.replace(/\r/g, "␍").replace(/\n/g, " ↵ "));
+      lines.push("", "## 引用单位对照（同一正文：按行 → 按结构段落）", "",
+        `对照策略：${comparison.baseline_strategy} → ${comparison.active_strategy}；每个引用单位最多${comparison.max_quote_chars}个Unicode码点。`,
+        "本地预览新增模型请求：Embedding 0；HTTP 0；Reranker 0；聊天 0。上方模型服务计数不变；浏览器对本机的预览POST不计入模型服务HTTP。",
+        "对照不重新检索、不补上下文、不请求模型、不修改已经生成的回答或其引用编号。旧回答缺少quote_strategy时仍按line-v1解释，不把旧Q编号改读为新Q编号。",
+        "表中↵表示原文换行；offset为Unicode码点[start,end)，可在同一原文定位；完整JSON保留真实换行、不截断。",
+        `对照说明：${cell(comparison.notice)}`);
+      for (const [sourceId, source] of Object.entries(comparison.sources)) {
+        lines.push("", `### ${sourceId} / ${cell(source.chunk_id)}`, "",
+          "| 按行line-v1编号 | 原文 |", "|---|---|");
+        const baseline = Object.entries(source.baseline_quotes);
+        for (const [id, quote] of baseline) lines.push(`| ${sourceId}/${id} | ${quoteCell(quote)} |`);
+        if (!baseline.length) lines.push("| 无可引用单位 | — |");
+        lines.push("", "| 按段paragraph-v1编号 | 对应旧Q | 原文码点范围 / 类型 / 是否拆分 | 原文 |", "|---|---|---|---|");
+        const active = Object.entries(source.active_quotes);
+        for (const [id, quote] of active) {
+          const span = source.active_spans[id];
+          lines.push(`| ${sourceId}/${id} | ${span.baseline_ids.join("、") || "无旧引用重叠"} | [${span.start},${span.end}) / ${span.kind} / ${span.split ? "是" : "否"} | ${quoteCell(quote)} |`);
+        }
+        if (!active.length) lines.push("| 无可引用单位 | — | — | — |");
+      }
+    }
     if (data.answer_generation) {
       const generation = data.answer_generation, answer = generation.answer, counts = generation.request_counts;
       const labels = { answered: "依据候选作答，仍需人工核验", partial: "部分回答，仍有资料缺口", insufficient_evidence: "证据不足，无法据此回答" };
       lines.push("", "## 带引用回答（重排前5块 → 生成 → 结构与引用定位校验）", "",
         `回答模型：${cell(generation.model)}；最大输出Token=${generation.max_tokens}`,
+        `回答引用策略：${generation.quote_strategy || "line-v1（旧报告，未重解释既有Q编号）"}`,
         `回答状态：${answer.status}（${labels[answer.status]}）`,
         `本次成功生成新增请求：Embedding ${counts.embedding}；HTTP ${counts.http}；Reranker ${counts.reranker}；聊天 ${counts.chat}（上方为完成阶段累计，不重复相加；未知失败请求不包含在内）`,
         "选中证据：");
