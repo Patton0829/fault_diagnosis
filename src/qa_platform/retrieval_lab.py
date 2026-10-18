@@ -17,6 +17,7 @@ from qa_platform.settings import DATA_DIR, PROJECT_ROOT
 
 DEFAULT_INDEX = DATA_DIR / "milvus_indexes" / "kubernetes_zh_v1"
 PAGE = PROJECT_ROOT / "web" / "retrieval_lab.html"
+EXPORT_SCRIPT = PROJECT_ROOT / "web" / "retrieval_export.js"
 
 
 class ComparisonRequest(BaseModel):
@@ -50,6 +51,11 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
     @app.get("/")
     def page():
         return FileResponse(PAGE)
+
+    @app.get("/assets/retrieval_export.js")
+    def export_script():
+        # 固定静态资源，不接收路径参数，不触发检索或模型调用。
+        return FileResponse(EXPORT_SCRIPT, media_type="text/javascript")
 
     @app.get("/api/plan")
     def plan():

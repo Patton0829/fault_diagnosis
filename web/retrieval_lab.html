@@ -12,6 +12,7 @@
   </style>
   <style>
     .more-candidates{border-top:1px solid var(--line)}.more-candidates summary{padding:10px 14px;color:var(--teal);font-size:12px;cursor:pointer}.more-candidates[open] summary{border-bottom:1px solid #edf2f5}
+    .result-tools{margin-top:16px;padding:14px 18px;background:var(--paper);border:1px solid var(--line);border-radius:9px}.share-row{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}.share-title{font-size:14px;font-weight:600}.export-actions{display:flex;gap:9px;flex-wrap:wrap}.utility{padding:8px 13px;border:1px solid #b8cbd1;border-radius:6px;background:white;color:var(--teal);font-size:13px}.utility:hover:not(:disabled){background:var(--soft)}.share-notice{font-size:12px;color:var(--muted);margin-top:7px}.manual-copy{margin-top:12px}.manual-copy label{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}.manual-copy textarea{display:block;width:100%;min-height:180px;resize:vertical;padding:10px;border:1px solid #bdcbd5;border-radius:6px;background:#f6f8fa;color:var(--ink);font:12px/1.7 var(--mono)}.manual-copy textarea:focus-visible{outline:3px solid #169f94;outline-offset:2px}
   </style>
 </head>
 <body>
@@ -39,6 +40,13 @@
     <div id="status-row" class="status-row" role="status" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span id="status">正在读取计划；尚未运行检索。</span></div>
     <p id="error" class="error" role="alert" hidden></p>
   </form>
+
+  <section class="result-tools" aria-label="分享本轮结果">
+    <div class="share-row"><p class="share-title">分享本轮结果</p><div class="export-actions"><button id="copy-result" class="utility" type="button" disabled>复制实验摘要</button><button id="export-json" class="utility" type="button" disabled>导出完整 JSON</button></div></div>
+    <p id="export-status" class="share-notice" role="status" aria-live="polite">完成一次检索后可用；复制和导出不新增模型请求。</p>
+    <p class="share-notice">摘要含完整候选排名；JSON另含全部候选原文和来源元数据（可能含本机路径）。分享前请检查敏感内容；刷新或换题前请先导出需要保留的结果。</p>
+    <div id="export-fallback" class="manual-copy" hidden><label for="export-fallback-text">浏览器未允许自动复制。请在下方全选后按 ⌘C / Ctrl+C 手动复制。</label><textarea id="export-fallback-text" aria-label="手动复制实验摘要" readonly spellcheck="false"></textarea></div>
+  </section>
 
   <section class="workspace" aria-labelledby="results-title">
     <div class="section-head"><h2 id="results-title">排序对照</h2><p id="result-summary" class="result-summary">先看关键词，再观察两路如何互补</p></div>
@@ -68,17 +76,18 @@
   <p id="notice" class="notice"></p>
   <footer class="footer"><span>同一份正文 · 同一检索范围 · 不重排 · 不调用聊天模型</span><span id="request-summary">首次打开只读取计划，模型请求为 0。</span></footer>
 </main>
+<script src="/assets/retrieval_export.js"></script>
 <script>
 "use strict";
 // 所有语料和接口文本只通过 textContent 展示；页面没有外部资源或自动 POST。
 const byId = id => document.getElementById(id);
 const routeNames = {bm25:"BM25",dense:"Dense",rrf:"RRF"};
-const state = {plan:null,data:null,busy:false,selected:null,sequence:0};
+const state = {plan:null,data:null,busy:false,selected:null,sequence:0,receivedAt:null,copying:false};
 function node(tag,className,text){const item=document.createElement(tag);if(className)item.className=className;if(text!==undefined)item.textContent=String(text);return item;}
 function setStatus(message,busy=false){byId("status").textContent=message;byId("status-row").classList.toggle("busy",busy);}
-function setBusy(busy){state.busy=busy;for(const id of ["query","bm25-button","hybrid-button"])byId(id).disabled=busy||!state.plan;byId("columns").setAttribute("aria-busy",String(busy));}
+function setBusy(busy){state.busy=busy;for(const id of ["query","bm25-button","hybrid-button"])byId(id).disabled=busy||!state.plan;byId("columns").setAttribute("aria-busy",String(busy));updateExportButtons();}
 function showError(message){byId("error").textContent=message;byId("error").hidden=false;}
-function clearResults(){state.data=null;state.selected=null;byId("detail").hidden=true;for(const key of Object.keys(routeNames)){byId(key+"-list").replaceChildren();byId(key+"-list").hidden=true;if(key!=="rrf"){byId(key+"-more-list").replaceChildren();byId(key+"-more").hidden=true;byId(key+"-more").open=false;}}}
+function clearResults(){state.data=null;state.selected=null;state.receivedAt=null;clearShareNotice();updateExportButtons();byId("detail").hidden=true;for(const key of Object.keys(routeNames)){byId(key+"-list").replaceChildren();byId(key+"-list").hidden=true;if(key!=="rrf"){byId(key+"-more-list").replaceChildren();byId(key+"-more").hidden=true;byId(key+"-more").open=false;}}}
 function showEmpty(key,title,message){const box=byId(key+"-empty");box.replaceChildren(node("strong","",title),node("p","",message));box.hidden=false;}
 function pendingResults(mode){clearResults();for(const key of Object.keys(routeNames)){byId(key+"-count").textContent="待检索";showEmpty(key,"等待本轮结果",key!=="bm25"&&mode==="bm25"?"本轮只运行 BM25。":"正在核对与计算，完成后展示候选。");}byId("result-summary").textContent="正在处理当前问题…";}
 function safeSource(value){if(typeof value!=="string")return null;try{const url=new URL(value);return ["http:","https:"].includes(url.protocol)&&!url.username&&!url.password?url.href:null;}catch{return null;}}
@@ -123,7 +132,7 @@ function validateData(data){
   }
 }
 function renderResults(data){
-  validateData(data);state.data=data;state.selected=null;
+  validateData(data);state.data=data;state.selected=null;state.receivedAt=new Date().toISOString();clearShareNotice();byId("export-status").textContent="本轮结果已就绪，可复制摘要或导出完整JSON；不会重新调用模型。";
   for(const key of Object.keys(routeNames)){
     const hits=data.routes[key],visible=key==="rrf"?hits:hits.slice(0,data.top_k),list=byId(key+"-list");list.replaceChildren(...visible.map(hit=>makeHit(key,hit)));list.hidden=!hits.length;byId(key+"-empty").hidden=Boolean(hits.length);byId(key+"-count").textContent=visible.length<hits.length?`前 ${visible.length} / ${hits.length} 块`:`${hits.length} 块`;
     if(key!=="rrf"){const extra=hits.slice(data.top_k),more=byId(key+"-more");more.open=false;more.hidden=!extra.length;byId(key+"-more-label").textContent=`展开全部 ${hits.length} 条召回（另 ${extra.length} 块）`;const extraList=byId(key+"-more-list");extraList.setAttribute("start",String(data.top_k+1));extraList.replaceChildren(...extra.map(hit=>makeHit(key,hit)));}
@@ -135,7 +144,42 @@ function renderResults(data){
   byId("notice").textContent=typeof data.notice==="string"?data.notice:"";
   setStatus(`${data.mode==="bm25"?"BM25 本地检索完成，模型请求为 0。":"三路对照完成，问题只编码一次，RRF 在本地计算。"} 问题分词：${tokens.length?tokens.join(" / "):"过滤后没有有效词"}`);
   const first=data.routes.rrf[0]||data.routes.bm25[0]||data.routes.dense[0];if(first)selectChunk(first.chunk_id,false);
+  updateExportButtons();
 }
+// 导出只读取已经收到的state.data，不调用compare()、fetch()或任何模型。
+function hasExportResult(){return Boolean(!state.busy&&state.data&&state.receivedAt&&window.RetrievalExport&&byId("query").value.trim()===state.data.query);}
+function updateExportButtons(){const disabled=!hasExportResult()||state.copying;byId("copy-result").disabled=disabled;byId("export-json").disabled=disabled;}
+function clearShareNotice(){byId("export-fallback").hidden=true;byId("export-fallback-text").value="";byId("export-status").textContent="完成一次检索后可用；复制和导出不新增模型请求。";}
+function currentReport(){if(!hasExportResult())throw new Error("没有当前问题的已完成结果");return window.RetrievalExport.buildReport(state.data,{receivedAt:state.receivedAt,exportedAt:new Date().toISOString(),selectedChunkId:state.selected});}
+async function copySummary(){
+  if(!hasExportResult()||state.copying)return;
+  const result=state.data,sequence=state.sequence;let text="";
+  const stillCurrent=()=>state.data===result&&state.sequence===sequence&&byId("query").value.trim()===result.query;
+  state.copying=true;updateExportButtons();byId("export-status").textContent="正在复制本轮摘要…";
+  try{
+    text=window.RetrievalExport.summaryText(currentReport());
+    if(!navigator.clipboard||typeof navigator.clipboard.writeText!=="function")throw new Error("自动复制不可用");
+    await navigator.clipboard.writeText(text);
+    if(stillCurrent()){byId("export-fallback").hidden=true;byId("export-fallback-text").value="";byId("export-status").textContent="实验摘要已复制，可直接粘贴到聊天；包含折叠候选排名，候选全文请导出JSON。";}
+  }catch{
+    if(stillCurrent()){
+      if(text){const area=byId("export-fallback-text");area.value=text;byId("export-fallback").hidden=false;area.focus();area.select();byId("export-status").textContent="自动复制未完成，已展开手动复制框；无需重新检索。";}
+      else byId("export-status").textContent="摘要生成失败，未复制不完整结果。";
+    }
+  }finally{state.copying=false;updateExportButtons();}
+}
+function downloadJson(){
+  if(!hasExportResult()||state.copying)return;let url=null,link=null,scheduled=false;
+  try{
+    const report=currentReport(),blob=new Blob([JSON.stringify(report,null,2)+"\n"],{type:"application/json;charset=utf-8"});
+    url=URL.createObjectURL(blob);link=document.createElement("a");link.href=url;link.download=window.RetrievalExport.downloadName(report);link.hidden=true;document.body.append(link);link.click();
+    const savedUrl=url;setTimeout(()=>URL.revokeObjectURL(savedUrl),30000);scheduled=true;
+    byId("export-status").textContent="已发起完整JSON下载，包含所有返回候选和未截断原文；若未出现，请检查浏览器下载提示。";
+  }catch{byId("export-status").textContent="JSON下载未完成，请检查浏览器下载限制；未重新检索或请求模型。";}
+  finally{if(link)link.remove();if(url&&!scheduled)URL.revokeObjectURL(url);}
+}
+byId("copy-result").addEventListener("click",copySummary);
+byId("export-json").addEventListener("click",downloadJson);
 async function compare(mode){
   if(state.busy||!state.plan)return;const query=byId("query").value.trim();if(!query){byId("query").reportValidity();byId("query").focus();return;}
   const sequence=++state.sequence;setBusy(true);byId("error").hidden=true;pendingResults(mode);byId("request-summary").textContent="本轮请求进行中；等待服务返回实际计数。";
