@@ -24,6 +24,73 @@
     return seen;
   }
 
+  const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
+  function exactKeys(value, keys) {
+    return isObject(value) && Object.keys(value).length === keys.length && keys.every(key => own(value, key));
+  }
+  function sameJson(left, right) {
+    if (left === right) return true;
+    if (Array.isArray(left) || Array.isArray(right))
+      return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((item, index) => sameJson(item, right[index]));
+    return isObject(left) && isObject(right) && Object.keys(left).length === Object.keys(right).length &&
+      Object.keys(left).every(key => own(right, key) && sameJson(left[key], right[key]));
+  }
+  function validateFreeText(text, maximum) {
+    // Array.from按Unicode码点计数，与Python字符串长度一致；不把emoji的代理对算两次。
+    requireValue(typeof text === "string" && text.trim() && text === text.trim() &&
+      Array.from(text).length <= maximum && !/[\u0000-\u001f\u007f]/.test(text) && !/\[S[0-9]+\]/.test(text),
+    "回答自由文本超长、为空、含控制字符或混入引用编号");
+  }
+  function validateAnswer(result) {
+    requireValue(result.mode === "hybrid" && own(result.routes, "reranker") && own(result, "rerank_comparison"),
+      "回答必须以完整重排结果为基础");
+    const generation = result.answer_generation;
+    requireValue(exactKeys(generation, ["model", "max_tokens", "evidence_ids", "sources", "answer", "request_counts", "notice"]) &&
+      typeof generation.model === "string" && generation.model.trim() && generation.max_tokens === 4096 && typeof generation.notice === "string",
+    "回答生成合同、模型或输出额度非法");
+    const ids = result.routes.reranker.slice(0, Math.min(5, result.top_k)).map(hit => hit.chunk_id);
+    requireValue(ids.length > 0 && sameJson(generation.evidence_ids, ids), "回答证据必须精确对应本轮重排前5块");
+    const sourceIds = ids.map((id, index) => `S${index + 1}`);
+    requireValue(exactKeys(generation.sources, sourceIds), "回答证据编号不完整或非法");
+    for (const [index, sourceId] of sourceIds.entries()) {
+      const source = generation.sources[sourceId], record = result.records[ids[index]];
+      requireValue(exactKeys(source, ["chunk_id", "text", "quotes", "metadata"]) && source.chunk_id === ids[index] &&
+        source.text === record.text && isObject(source.metadata) && sameJson(source.metadata, record.metadata),
+      "回答来源正文或完整元数据与本轮候选不一致");
+      requireValue(isObject(source.quotes) && Object.keys(source.quotes).length > 0, "回答来源缺少原文片段");
+      const quoteIds = Object.keys(source.quotes);
+      requireValue(quoteIds.every((id, position) => own(source.quotes, `Q${position + 1}`)) &&
+        quoteIds.every(id => /^Q[1-9][0-9]*$/.test(id) && typeof source.quotes[id] === "string" &&
+          source.quotes[id].length > 0 && source.text.includes(source.quotes[id])), "回答原文片段编号非法或无法定位到连续原文");
+    }
+    const answer = generation.answer;
+    requireValue(exactKeys(answer, ["status", "claims", "missing_info"]) &&
+      ["answered", "partial", "insufficient_evidence"].includes(answer.status) &&
+      Array.isArray(answer.claims) && answer.claims.length <= 3 &&
+      Array.isArray(answer.missing_info) && answer.missing_info.length <= 3, "回答JSON结构或条目数非法");
+    requireValue(answer.status === "insufficient_evidence" ? answer.claims.length === 0 && answer.missing_info.length > 0
+      : answer.claims.length > 0, "回答状态与要点或资料缺口不一致");
+    requireValue(answer.status !== "partial" || answer.missing_info.length > 0, "部分回答必须说明资料缺口");
+    for (const claim of answer.claims) {
+      requireValue(exactKeys(claim, ["text", "evidence"]) && Array.isArray(claim.evidence) &&
+        claim.evidence.length >= 1 && claim.evidence.length <= 3, "回答要点或引用条目数非法");
+      validateFreeText(claim.text, 300);
+      for (const reference of claim.evidence) {
+        requireValue(exactKeys(reference, ["source_id", "quote_id"]) &&
+          typeof reference.source_id === "string" && /^S[1-9][0-9]*$/.test(reference.source_id) &&
+          typeof reference.quote_id === "string" && /^Q[1-9][0-9]*$/.test(reference.quote_id) &&
+          own(generation.sources, reference.source_id) && own(generation.sources[reference.source_id].quotes, reference.quote_id),
+        "回答引用不存在或编号非法");
+      }
+    }
+    for (const missing of answer.missing_info) validateFreeText(missing, 240);
+    validateCounts(generation.request_counts);
+    requireValue(sameJson(generation.request_counts, { embedding: 0, http: 1, reranker: 0, chat: 1 }),
+      "回答新增请求计数不符合单次生成合同");
+    requireValue(sameJson(result.request_counts, { embedding: 1, http: 5, reranker: 1, chat: 1 }),
+      "回答完成阶段累计请求计数不一致");
+  }
+
   function validateResult(result) {
     requireValue(result && typeof result.query === "string" && result.query.trim(), "缺少已完成的问题");
     requireValue(["bm25", "hybrid"].includes(result.mode), "未知检索模式");
@@ -84,6 +151,13 @@
         key => result.request_counts[key] >= comparison.request_counts[key]
       ), "累计请求计数小于重排新增计数");
     }
+    if (own(result, "answer_failure")) {
+      const failure = result.answer_failure;
+      requireValue(hasReranker && failure && typeof failure.message === "string" && failure.message.trim() &&
+        failure.request_may_have_occurred === true && failure.request_counts_scope === "completed_stages_only",
+      "回答失败经历或请求计数口径非法");
+    }
+    if (own(result, "answer_generation")) validateAnswer(result);
   }
 
   function isoTime(value) {
@@ -129,7 +203,7 @@
     const lines = [
       "# Kubernetes 检索实验摘要", "",
       `问题：${cell(data.query)}`,
-      `模式：${data.mode === "hybrid" ? "BM25 + Dense + RRF" + (data.routes.reranker ? " + Reranker（完整候选池重排）" : "") : "仅BM25（Dense/RRF未运行）"}`,
+      `模式：${data.mode === "hybrid" ? "BM25 + Dense + RRF" + (data.routes.reranker ? " + Reranker（完整候选池重排）" : "") + (data.answer_generation ? " + 带引用回答" : "") : "仅BM25（Dense/RRF未运行）"}`,
       `浏览器收到结果时间：${report.browser_received_at}（不是服务端推理时间）`,
       `导出时间：${report.exported_at}`,
       `参数：范围${data.scope_count}块；每路最多${data.recall_k}块；融合最多${data.top_k}块；RRF常数${data.rrf_constant}`,
@@ -139,6 +213,10 @@
       `当前选中块：${cell(report.selected_chunk_id || "无")}`, "",
       ...(data.rerank_failure ? [
         `重排失败经历：${cell(data.rerank_failure.message)}`,
+        "失败请求可能已发送，处理量与费用未知；以上请求计数仅覆盖完成阶段，不包含未知的失败请求。手动重试成功也不会抹去这次失败经历。", "",
+      ] : []),
+      ...(data.answer_failure ? [
+        `回答生成失败经历：${cell(data.answer_failure.message)}`,
         "失败请求可能已发送，处理量与费用未知；以上请求计数仅覆盖完成阶段，不包含未知的失败请求。手动重试成功也不会抹去这次失败经历。", "",
       ] : []),
       "## 完整候选排名（含折叠候选；名次 / 原路线分数）", "",
@@ -187,6 +265,36 @@
       }
       lines.push("", `重排说明：${cell(comparison.notice)}`,
         "重排边界：Reranker与BM25、余弦、RRF原始分数不可混加；重排分数不是概率或正确率；重排不能找回两路都未召回的文本。");
+    }
+    if (data.answer_generation) {
+      const generation = data.answer_generation, answer = generation.answer, counts = generation.request_counts;
+      const labels = { answered: "依据候选作答，仍需人工核验", partial: "部分回答，仍有资料缺口", insufficient_evidence: "证据不足，无法据此回答" };
+      lines.push("", "## 带引用回答（重排前5块 → 生成 → 结构与引用定位校验）", "",
+        `回答模型：${cell(generation.model)}；最大输出Token=${generation.max_tokens}`,
+        `回答状态：${answer.status}（${labels[answer.status]}）`,
+        `本次成功生成新增请求：Embedding ${counts.embedding}；HTTP ${counts.http}；Reranker ${counts.reranker}；聊天 ${counts.chat}（上方为完成阶段累计，不重复相加；未知失败请求不包含在内）`,
+        "选中证据：");
+      for (const [sourceId, source] of Object.entries(generation.sources)) {
+        const metadata = source.metadata;
+        lines.push(`- [${sourceId}] ${cell(source.chunk_id)}；${cell(metadata.title || "标题未记录")}；${cell(metadata.source_url || "来源URL未记录")}；版本=${cell(metadata.kubernetes_release || "未确认")}；审核=${cell(metadata.review_status || "未记录")}`);
+      }
+      lines.push("", "回答要点：");
+      if (!answer.claims.length) lines.push("现有证据不足，本轮没有可展示的有引用要点。");
+      for (const [index, claim] of answer.claims.entries()) {
+        const references = claim.evidence.map(reference => `[${reference.source_id}/${reference.quote_id}]`);
+        lines.push(`${index + 1}. ${cell(claim.text)} ${references.join(" ")}`);
+        for (const reference of claim.evidence) {
+          const quote = generation.sources[reference.source_id].quotes[reference.quote_id];
+          const preview = Array.from(quote).slice(0, 240).join("");
+          lines.push(`   原文[${reference.source_id}/${reference.quote_id}]：${cell(preview)}${Array.from(quote).length > 240 ? "…（摘要截短；完整原文见JSON）" : ""}`);
+        }
+      }
+      if (answer.missing_info.length) {
+        lines.push("", "还需补充或核实：");
+        for (const item of answer.missing_info) lines.push(`- ${cell(item)}`);
+      }
+      lines.push("", `回答说明：${cell(generation.notice)}`,
+        "回答校验边界：仅检查结构、引用身份及摘录能否定位到原文，不等于已验证推断被原文充分支持，也不是正确率评测。文档未审核、版本适用性仍需核实；示例名称、IP、输出不能当作现场值；命令只作为文本展示，不执行。复制、原文核对与导出不再请求模型。");
     }
     lines.push("", "## 来源 / 快照 / 审核", "");
     const sources = new Set();

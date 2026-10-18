@@ -254,12 +254,19 @@ def build_quotes(hit: RerankedHit) -> dict[str, str]:
     """程序从正文提取连续原文并编号，模型只选择编号，不负责逐字抄写。"""
     content = hit.candidate.document.page_content
     # 当前分块器用双换行分隔补充标题和正文；不把章节标题当作原文依据。
-    prefix, separator, body = content.partition("\n\n")
-    if not separator:
-        body = prefix
+    body_only = hit.candidate.document.metadata.get("document_mode") == "body-only"
+    if body_only:
+        # Kubernetes已是正文，第一段不能按旧铁路的“补充标题”规则丢掉。
+        body = content
+    else:
+        prefix, separator, body = content.partition("\n\n")
+        if not separator:
+            body = prefix
     quotes = {}
     for line in body.splitlines():
         line = line.strip()
+        if body_only and (re.match(r"^#{1,6}\s", line) or re.match(r"^(?:`{3,}|~{3,})", line)):
+            continue  # 标题与围栏标记本身不作为Kubernetes回答的事实证据。
         # 每段均为原文连续子串；短字段标题不作为独立证据，长行分成小段。
         for start in range(0, len(line), 240):
             text = line[start : start + 240]
@@ -271,7 +278,7 @@ def build_quotes(hit: RerankedHit) -> dict[str, str]:
 
 
 def build_messages(
-    query: str, sources: dict[str, RerankedHit]
+    query: str, sources: dict[str, RerankedHit], *, system_suffix: str = ""
 ) -> list[ChatCompletionMessageParam]:
     """系统规则固定；问题和资料放在用户消息的JSON数据里，不发送本地路径或文档说明。"""
     evidence = []
@@ -288,7 +295,7 @@ def build_messages(
             }
         )
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": SYSTEM_PROMPT + system_suffix},
         {
             "role": "user",
             "content": json.dumps(
@@ -364,6 +371,8 @@ def generate_answer(
     sources: dict[str, RerankedHit],
     model: str = DEFAULT_MODEL,
     max_tokens: int = 4096,
+    *,
+    system_suffix: str = "",
 ) -> GroundedAnswer:
     """沿用流式接口但先收集正文，确认正常结束及引用有效后才允许展示。"""
     if not query.strip() or model not in MODEL_CONFIGS:
@@ -379,7 +388,7 @@ def generate_answer(
     parts, finish_reason = [], None
     with client.chat.completions.create(
         model=model,
-        messages=build_messages(query, sources),
+        messages=build_messages(query, sources, system_suffix=system_suffix),
         stream=True,
         max_tokens=max_tokens,
         extra_body=MODEL_CONFIGS[model]["extra_body"],

@@ -107,6 +107,38 @@ function beforeRerank(completed = rerankFixture(13)) {
   return data;
 }
 
+function answerFixture({ status = "answered", model = "synthetic-chat-only" } = {}) {
+  const data = rerankFixture(13), sources = {};
+  const ids = data.routes.reranker.slice(0, Math.min(5, data.top_k)).map(hit => hit.chunk_id);
+  for (const [index, id] of ids.entries()) {
+    const record = data.records[id];
+    sources[`S${index + 1}`] = { chunk_id: id, text: record.text,
+      quotes: { Q1: record.text.split("\n")[0] }, metadata: JSON.parse(JSON.stringify(record.metadata)) };
+  }
+  data.answer_generation = {
+    model, max_tokens: 4096, evidence_ids: ids, sources,
+    answer: {
+      status,
+      claims: status === "insufficient_evidence" ? [] : [
+        { text: '合成回答：这只是待核验的示例，不执行命令 <img src=x onerror=alert(1)>。', evidence: [{ source_id: "S1", quote_id: "Q1" }] },
+        { text: "合成回答：需要区分示例值与现场实际值。", evidence: [{ source_id: "S2", quote_id: "Q1" }] },
+      ],
+      missing_info: status === "answered" ? [] : ["还需补充集群版本和现场解析结果。"],
+    },
+    request_counts: { embedding: 0, http: 1, reranker: 0, chat: 1 },
+    notice: "合成回答，仅验证结构与引用定位；不能证明推断被原文支持。",
+  };
+  data.request_counts = { embedding: 1, http: 5, reranker: 1, chat: 1 };
+  return data;
+}
+
+function beforeAnswer(completed = answerFixture()) {
+  const data = JSON.parse(JSON.stringify(completed));
+  delete data.answer_generation;
+  data.request_counts = { embedding: 1, http: 4, reranker: 1, chat: 0 };
+  return data;
+}
+
 function deepFreeze(value) {
   if (value && typeof value === "object") {
     Object.freeze(value);
@@ -257,6 +289,166 @@ test("complete RRF pool can be exported before running reranker", () => {
   const report = helper.buildReport(data, TIMES);
   assert.equal(report.result.rrf_pool.length, 10);
   assert.ok(!helper.summaryText(report).includes("## 完整候选重排对照"));
+});
+
+test("answer report preserves complete evidence, reference precision, original metadata, and known-stage counts", () => {
+  const original = deepFreeze(answerFixture());
+  const report = helper.buildReport(original, { ...TIMES, selectedChunkId: original.answer_generation.evidence_ids[0] });
+  const saved = JSON.parse(JSON.stringify(report)).result;
+  assert.deepEqual(saved, original);
+  assert.deepEqual(saved.answer_generation.evidence_ids, saved.routes.reranker.slice(0, 5).map(hit => hit.chunk_id));
+  assert.equal(Object.keys(saved.answer_generation.sources).length, 5);
+  assert.equal(saved.answer_generation.sources.S2.metadata.source, "/Users/synthetic/private-source.md");
+  assert.equal(saved.answer_generation.sources.S2.text, original.records[saved.answer_generation.evidence_ids[1]].text);
+  assert.deepEqual(saved.answer_generation.request_counts, { embedding: 0, http: 1, reranker: 0, chat: 1 });
+  assert.deepEqual(saved.request_counts, { embedding: 1, http: 5, reranker: 1, chat: 1 });
+  const summary = helper.summaryText(report);
+  assert.match(summary, /模式：.*带引用回答/);
+  assert.match(summary, /回答模型：synthetic-chat-only；最大输出Token=4096/);
+  assert.match(summary, /回答状态：answered/);
+  assert.match(summary, /实际请求：Embedding 1；HTTP 5；Reranker 1；聊天 1/);
+  assert.match(summary, /成功生成新增请求：Embedding 0；HTTP 1；Reranker 0；聊天 1/);
+  assert.match(summary, /\[S1\] chunk-13/);
+  assert.match(summary, /原文\[S1\/Q1\]：完整合成正文 13/);
+  assert.match(summary, /needs_review/);
+  assert.match(summary, /来源URL未记录/);
+  assert.match(summary, /不是正确率评测/);
+  assert.match(summary, /示例名称、IP、输出不能当作现场值/);
+  assert.match(summary, /命令只作为文本展示，不执行/);
+  assert.match(summary, /不等于已验证推断被原文充分支持/);
+  assert.ok(!summary.includes("/Users/synthetic"));
+  assert.ok(!summary.includes("<img"));
+  assert.ok(!summary.includes("END-3")); // Candidate body stays complete in JSON, not the summary.
+});
+
+test("partial and insufficient answers expose missing information without implying correctness", () => {
+  for (const status of ["partial", "insufficient_evidence"]) {
+    const summary = helper.summaryText(helper.buildReport(deepFreeze(answerFixture({ status })), TIMES));
+    assert.match(summary, new RegExp(`回答状态：${status}`));
+    assert.match(summary, /还需补充或核实：/);
+    assert.match(summary, /还需补充集群版本和现场解析结果/);
+    assert.match(summary, /仅检查结构、引用身份及摘录能否定位到原文/);
+    if (status === "insufficient_evidence") assert.match(summary, /本轮没有可展示的有引用要点/);
+  }
+});
+
+test("answer export rejects changed evidence, incomplete rerank, malformed schema, unsupported references, and invented counts", () => {
+  const mutations = [
+    data => { delete data.routes.reranker; delete data.rerank_comparison; },
+    data => { data.routes.reranker.pop(); },
+    data => { data.answer_generation = null; },
+    data => { data.answer_generation.extra = "not allowed"; },
+    data => { data.answer_generation.model = ""; },
+    data => { data.answer_generation.max_tokens = 1024; },
+    data => { delete data.answer_generation.notice; },
+    data => { data.answer_generation.evidence_ids.reverse(); },
+    data => { data.answer_generation.evidence_ids.pop(); },
+    data => { data.answer_generation.evidence_ids[0] = "chunk-12"; },
+    data => { data.answer_generation.sources.S6 = data.answer_generation.sources.S1; },
+    data => { delete data.answer_generation.sources.S2; },
+    data => { data.answer_generation.sources.S01 = data.answer_generation.sources.S1; delete data.answer_generation.sources.S1; },
+    data => { data.answer_generation.sources.S1.chunk_id = "chunk-1"; },
+    data => { data.answer_generation.sources.S1.text = "changed source"; },
+    data => { data.answer_generation.sources.S1.metadata.title = "changed metadata"; },
+    data => { delete data.answer_generation.sources.S1.metadata.chunk_id; },
+    data => { data.answer_generation.sources.S1.quotes = {}; },
+    data => { data.answer_generation.sources.S1.quotes.Q1 = "this quotation does not occur in the original"; },
+    data => { data.answer_generation.sources.S1.quotes.Q1 = ""; },
+    data => { data.answer_generation.sources.S1.quotes.Q01 = data.answer_generation.sources.S1.quotes.Q1; delete data.answer_generation.sources.S1.quotes.Q1; },
+    data => { data.answer_generation.sources.S1.quotes.Q3 = data.answer_generation.sources.S1.quotes.Q1; },
+    data => { data.answer_generation.answer.status = "reliable"; },
+    data => { data.answer_generation.answer.extra = true; },
+    data => { data.answer_generation.answer.claims = []; },
+    data => { data.answer_generation.answer.status = "partial"; },
+    data => { data.answer_generation.answer.status = "insufficient_evidence"; },
+    data => { data.answer_generation.answer.claims.push(...data.answer_generation.answer.claims); },
+    data => { data.answer_generation.answer.claims[0].extra = true; },
+    data => { data.answer_generation.answer.claims[0].text = ""; },
+    data => { data.answer_generation.answer.claims[0].text = " "; },
+    data => { data.answer_generation.answer.claims[0].text = " 文本 "; },
+    data => { data.answer_generation.answer.claims[0].text = "字".repeat(301); },
+    data => { data.answer_generation.answer.claims[0].text = "自由文本不能包含[S1]引用"; },
+    data => { data.answer_generation.answer.claims[0].text = "不能有\n换行"; },
+    data => { data.answer_generation.answer.claims[0].text = "不能有\u007f控制符"; },
+    data => { data.answer_generation.answer.claims[0].evidence = []; },
+    data => { data.answer_generation.answer.claims[0].evidence = Array(4).fill({ source_id: "S1", quote_id: "Q1" }); },
+    data => { data.answer_generation.answer.claims[0].evidence[0].source_id = "S6"; },
+    data => { data.answer_generation.answer.claims[0].evidence[0].source_id = "__proto__"; },
+    data => { data.answer_generation.answer.claims[0].evidence[0].quote_id = "Q2"; },
+    data => { data.answer_generation.answer.claims[0].evidence[0].quote_id = "Q01"; },
+    data => { data.answer_generation.answer.claims[0].evidence[0].extra = true; },
+    data => { data.answer_generation.answer.missing_info = ["一", "二", "三", "四"]; },
+    data => { data.answer_generation.answer.missing_info = ["字".repeat(241)]; },
+    data => { data.answer_generation.answer.missing_info = ["\t不能有制表符"]; },
+    data => { data.answer_generation.answer.missing_info = ["不能在这里引用[S5]"]; },
+    data => { data.answer_generation.request_counts.http = 2; },
+    data => { data.answer_generation.request_counts.chat = 0; },
+    data => { data.answer_generation.request_counts.embedding = 1; },
+    data => { data.answer_generation.request_counts.reranker = 1; },
+    data => { data.request_counts.http = 4; },
+    data => { data.request_counts.http = 6; },
+    data => { data.request_counts.embedding = 2; },
+  ];
+  for (const mutate of mutations) {
+    const data = answerFixture(); mutate(data);
+    assert.throws(() => helper.buildReport(data, TIMES), undefined, mutate.toString());
+  }
+  const insufficient = answerFixture({ status: "insufficient_evidence" });
+  insufficient.answer_generation.answer.missing_info = [];
+  assert.throws(() => helper.buildReport(insufficient, TIMES));
+});
+
+test("answer text uses Unicode codepoints and complete JSON metadata equality independent of object key order", () => {
+  const data = answerFixture();
+  data.answer_generation.answer.claims[0].text = "🧪".repeat(300);
+  const source = data.answer_generation.sources.S2;
+  source.metadata = Object.fromEntries(Object.entries(source.metadata).reverse());
+  assert.doesNotThrow(() => helper.buildReport(data, TIMES));
+  data.answer_generation.answer.claims[0].text += "🧪";
+  assert.throws(() => helper.buildReport(data, TIMES));
+});
+
+test("answer evidence honors a smaller final Top-K and long citation previews never truncate the JSON", () => {
+  const data = answerFixture();
+  data.top_k = 3;
+  data.routes.rrf = data.rrf_pool.slice(0, 3);
+  data.rerank_comparison.final_k = 3;
+  data.answer_generation.evidence_ids = data.answer_generation.evidence_ids.slice(0, 3);
+  delete data.answer_generation.sources.S4;
+  delete data.answer_generation.sources.S5;
+  const source = data.answer_generation.sources.S2;
+  const offset = source.text.indexOf("尾段不可截断。");
+  source.quotes.Q1 = source.text.slice(offset, offset + 300);
+  const report = helper.buildReport(data, TIMES), summary = helper.summaryText(report);
+  assert.equal(Object.keys(report.result.answer_generation.sources).length, 3);
+  assert.equal(report.result.answer_generation.sources.S2.quotes.Q1.length, 300);
+  assert.match(summary, /摘要截短；完整原文见JSON/);
+  assert.ok(!summary.includes(source.quotes.Q1));
+  data.answer_generation.evidence_ids.push(data.routes.reranker[3].chunk_id);
+  assert.throws(() => helper.buildReport(data, TIMES));
+});
+
+test("answer failure history remains exportable before and after a successful manual retry", () => {
+  for (const completed of [false, true]) {
+    const data = completed ? answerFixture() : beforeAnswer();
+    data.answer_failure = { message: "合成回答失败 <script>bad</script>", request_may_have_occurred: true, request_counts_scope: "completed_stages_only" };
+    data.rerank_failure = { message: "此前重排失败", request_may_have_occurred: true, request_counts_scope: "completed_stages_only" };
+    const saved = helper.buildReport(deepFreeze(data), TIMES), summary = helper.summaryText(saved);
+    assert.deepEqual(saved.result.answer_failure, data.answer_failure);
+    assert.match(summary, /回答生成失败经历：合成回答失败 &lt;script&gt;/);
+    assert.match(summary, /重排失败经历：此前重排失败/);
+    assert.match(summary, /仅覆盖完成阶段，不包含未知的失败请求/);
+    assert.match(summary, /手动重试成功也不会抹去这次失败经历/);
+    assert.match(summary, completed ? /HTTP 5；Reranker 1；聊天 1/ : /HTTP 4；Reranker 1；聊天 0/);
+  }
+  for (const failure of [null, {}, { message: "error", request_may_have_occurred: false, request_counts_scope: "completed_stages_only" },
+    { message: "error", request_may_have_occurred: true, request_counts_scope: "all_attempts" }]) {
+    const data = beforeAnswer(); data.answer_failure = failure;
+    assert.throws(() => helper.buildReport(data, TIMES));
+  }
+  const invalidStage = beforeRerank();
+  invalidStage.answer_failure = { message: "error", request_may_have_occurred: true, request_counts_scope: "completed_stages_only" };
+  assert.throws(() => helper.buildReport(invalidStage, TIMES));
 });
 
 test("failed rerank history survives export before and after a successful manual retry without inventing counts", () => {
@@ -424,10 +616,15 @@ function uiHarness() {
   assert.match(inline, /\ninit\(\);\s*$/);
   vm.createContext(sandbox);
   // Test the production handlers; only the unrelated automatic plan GET is omitted.
-  vm.runInContext(inline.replace(/\ninit\(\);\s*$/, "") + "\nglobalThis.ui={state,renderResults,clearResults,setBusy,hasExportResult,updateExportButtons,copySummary,downloadJson,compare,rerank,updateRerankControls,validateRerankData};", sandbox, { filename: pagePath });
+  vm.runInContext(inline.replace(/\ninit\(\);\s*$/, "") + "\nglobalThis.ui={state,renderResults,clearResults,setBusy,hasExportResult,updateExportButtons,copySummary,downloadJson,compare,rerank,updateRerankControls,validateRerankData,generateAnswer,updateAnswerControls,validateAnswerData,showAnswerSource,configureAnswerModels,renderAnswerEvidence};", sandbox, { filename: pagePath });
   const element = id => document.getElementById(id);
   function ready(data = fixture()) {
-    sandbox.ui.state.plan = { document_count: 42, reranker: { model: "synthetic-reranker-only", url: "https://example.invalid/synthetic-rerank", max_candidates: 16 } };
+    sandbox.ui.state.plan = { document_count: 42, reranker: { model: "synthetic-reranker-only", url: "https://example.invalid/synthetic-rerank", max_candidates: 16 }, answer: {
+      models: [
+        { id: "synthetic-chat-only", base_url: "https://example.invalid/synthetic-chat", transport_notice: "HTTPS合成服务，仍发送证据。" },
+        { id: "synthetic-glm-http", base_url: "http://example.invalid/synthetic-glm", transport_notice: "HTTP明文传输，不发送敏感资料。" },
+      ], default_model: "synthetic-chat-only", max_sources: 5, max_tokens: 4096, notice: "只发送问题、证据和必要标记；无自动重试。",
+    } };
     element("query").value = data.query;
     sandbox.ui.renderResults(data);
     return data;
@@ -605,6 +802,217 @@ test("UI validates fixed original candidates and rejects malformed rerank respon
   assert.equal(element("rerank-results").hidden, true);
   assert.equal(element("rank-change-body").children.length, 0);
   assert.equal(element("copy-result").disabled, false);
+});
+
+test("answer UI requires completed rerank, current question, explicit consent and idle state", async () => {
+  const { ui, element, events, ready } = uiHarness();
+  for (const data of [fixture("bm25"), beforeRerank()]) {
+    ready(data);
+    element("answer-consent").checked = true;
+    ui.updateAnswerControls();
+    assert.equal(element("answer-consent").disabled, true);
+    assert.equal(element("answer-button").disabled, true);
+    await ui.generateAnswer();
+  }
+  ready(beforeAnswer());
+  assert.equal(element("answer-consent").checked, false);
+  assert.equal(element("answer-consent").disabled, false);
+  assert.equal(element("answer-button").disabled, true);
+  assert.equal(ui.state.answerModel, "synthetic-chat-only");
+  await ui.generateAnswer();
+  assert.equal(events.fetch.length, 0);
+  assert.match(element("answer-plan").textContent, /重排前 5 块/);
+  assert.match(element("answer-disclosure").textContent, /https:\/\/example\.invalid\/synthetic-chat/);
+  assert.match(element("answer-disclosure").textContent, /来源路径和完整元数据不交给模型/);
+  element("answer-consent").checked = true;
+  element("answer-consent").listeners.change();
+  assert.equal(element("answer-button").disabled, false);
+  ui.setBusy(true);
+  assert.equal(element("answer-button").disabled, true);
+  assert.equal(element("answer-model").disabled, true);
+  assert.equal(element("answer-consent").disabled, true);
+  await ui.generateAnswer();
+  ui.setBusy(false);
+  element("query").value = "another question";
+  ui.updateAnswerControls();
+  assert.equal(element("answer-button").disabled, true);
+  await ui.generateAnswer();
+  assert.equal(events.fetch.length, 0);
+});
+
+test("changing answer destination revokes consent and exposes HTTP transport risk without sending anything", async () => {
+  const { ui, element, events, ready } = uiHarness();
+  ready(beforeAnswer());
+  element("answer-consent").checked = true;
+  element("answer-consent").listeners.change();
+  assert.equal(element("answer-button").disabled, false);
+  element("answer-model").value = "synthetic-glm-http";
+  element("answer-model").listeners.change();
+  assert.equal(ui.state.answerModel, "synthetic-glm-http");
+  assert.equal(element("answer-consent").checked, false);
+  assert.equal(element("answer-button").disabled, true);
+  assert.equal(element("answer-transport").hidden, false);
+  assert.match(element("answer-transport").textContent, /HTTP 明文连接/);
+  assert.match(element("answer-disclosure").textContent, /http:\/\/example\.invalid\/synthetic-glm/);
+  await ui.generateAnswer();
+  assert.equal(events.fetch.length, 0);
+  element("answer-model").value = "unlisted-model";
+  element("answer-model").listeners.change();
+  assert.equal(ui.state.answerModel, "synthetic-glm-http");
+  assert.equal(element("answer-model").value, "synthetic-glm-http");
+  ui.state.answerModel = "unlisted-model";
+  element("answer-consent").checked = true;
+  await ui.generateAnswer();
+  assert.equal(events.fetch.length, 0);
+});
+
+test("answer UI posts only experiment identity and model once, preserves candidates, and renders escaped citation text", async () => {
+  const { ui, sandbox, element, events, ready } = uiHarness();
+  const completed = answerFixture(), original = ready(beforeAnswer(completed));
+  const originalJson = JSON.stringify(original), routes = JSON.stringify(original.routes), records = JSON.stringify(original.records);
+  let resolveResponse;
+  sandbox.fetch = (...args) => { events.fetch.push(args); return new Promise(resolve => { resolveResponse = resolve; }); };
+  element("answer-consent").checked = true;
+  ui.updateAnswerControls();
+  const pending = ui.generateAnswer();
+  assert.equal(ui.state.busy, true);
+  assert.equal(element("answer-button").disabled, true);
+  assert.equal(element("copy-result").disabled, true);
+  assert.equal(element("answer-result").hidden, true);
+  await ui.generateAnswer();
+  assert.equal(events.fetch.length, 1);
+  const [url, options] = events.fetch[0];
+  assert.equal(url, "/api/answer");
+  assert.equal(options.method, "POST");
+  assert.equal(options.credentials, "same-origin");
+  assert.equal(options.cache, "no-store");
+  assert.equal(options.headers["X-Retrieval-Lab"], "1");
+  assert.deepEqual(JSON.parse(options.body), { experiment_id: original.experiment_id, model: "synthetic-chat-only" });
+  for (const privateText of [original.query, "metadata", "/Users/synthetic", "完整原文", "api_key", "evidence"])
+    assert.ok(!options.body.includes(privateText));
+  resolveResponse({ ok: true, json: async () => completed });
+  await pending;
+  assert.equal(JSON.stringify(original), originalJson);
+  assert.equal(JSON.stringify(ui.state.data.routes), routes);
+  assert.equal(JSON.stringify(ui.state.data.records), records);
+  assert.equal(element("answer-result").hidden, false);
+  assert.equal(element("answer-claims").children.length, 2);
+  assert.equal(element("answer-claims").children[0].children[0].textContent, completed.answer_generation.answer.claims[0].text);
+  assert.equal(element("answer-button").disabled, true);
+  assert.equal(element("answer-model").disabled, true);
+  assert.equal(element("answer-consent").disabled, true);
+  assert.equal(element("copy-result").disabled, false);
+  ui.showAnswerSource("S1", "Q1");
+  assert.equal(element("answer-source-view").hidden, false);
+  assert.equal(element("answer-quote").textContent, completed.answer_generation.sources.S1.quotes.Q1);
+  assert.equal(element("answer-source-text").textContent, completed.answer_generation.sources.S1.text);
+  assert.equal(ui.state.selected, completed.answer_generation.sources.S1.chunk_id);
+  assert.match(element("answer-quote-label").textContent, /不等于证明结论成立/);
+  await ui.generateAnswer();
+  await ui.copySummary();
+  ui.downloadJson();
+  assert.equal(events.fetch.length, 1);
+  assert.match(events.clipboard[0], /回答状态：answered/);
+  assert.match(events.clipboard[0], /原文\[S1\/Q1\]/);
+  const saved = JSON.parse(await events.blobs[0].text()).result;
+  assert.deepEqual(saved.answer_generation, completed.answer_generation);
+  assert.equal(saved.routes.reranker.length, 13);
+});
+
+test("failed answer is not displayed, original retrieval remains exportable, and manual retry retains failure history", async () => {
+  const { ui, sandbox, element, events, ready } = uiHarness();
+  const completed = answerFixture(), original = ready(beforeAnswer(completed));
+  const originalRoutes = JSON.stringify(original.routes), originalRecords = JSON.stringify(original.records);
+  sandbox.fetch = async (...args) => { events.fetch.push(args); return { ok: false, json: async () => ({ detail: "no raw model output" }) }; };
+  element("answer-consent").checked = true;
+  await ui.generateAnswer();
+  assert.equal(events.fetch.length, 1);
+  assert.equal(JSON.stringify(ui.state.data.routes), originalRoutes);
+  assert.equal(JSON.stringify(ui.state.data.records), originalRecords);
+  assert.equal(ui.state.data.request_counts.http, 4);
+  assert.equal(ui.state.data.request_counts.chat, 0);
+  assert.equal(ui.state.data.answer_failure.request_may_have_occurred, true);
+  assert.equal(element("answer-result").hidden, true);
+  assert.equal(element("answer-claims").children.length, 0);
+  assert.equal(element("answer-error").hidden, false);
+  assert.match(element("answer-error").textContent, /不会自动重试/);
+  assert.equal(element("copy-result").disabled, false);
+  await ui.copySummary();
+  assert.match(events.clipboard[0], /回答生成失败经历/);
+  const failure = JSON.stringify(ui.state.data.answer_failure);
+  assert.equal(element("answer-button").disabled, false);
+  sandbox.fetch = async (...args) => { events.fetch.push(args); return { ok: true, json: async () => completed }; };
+  await ui.generateAnswer();
+  assert.equal(events.fetch.length, 2);
+  assert.equal(JSON.stringify(ui.state.data.answer_failure), failure);
+  assert.equal(element("answer-result").hidden, false);
+  assert.match(element("request-summary").textContent, /不含失败尝试/);
+  await ui.copySummary();
+  assert.match(events.clipboard[1], /回答生成失败经历/);
+  assert.match(events.clipboard[1], /HTTP 5；Reranker 1；聊天 1/);
+  element("query").value = "new question";
+  element("query").listeners.input();
+  assert.equal(ui.state.data, null);
+  assert.equal(element("answer-consent").checked, false);
+  assert.equal(element("answer-button").disabled, true);
+  assert.equal(element("answer-result").hidden, true);
+});
+
+test("answer UI validates the response model, immutable stages, citation contract and strict schema before displaying any body", async () => {
+  const { ui, sandbox, element, events, ready } = uiHarness();
+  const original = ready(beforeAnswer());
+  const mutations = [
+    data => { data.answer_generation.model = "another-model"; },
+    data => { data.query = "different question"; },
+    data => { data.experiment_id = "different-experiment"; },
+    data => { data.records["chunk-1"].text = "changed"; },
+    data => { data.routes.reranker[0].score = 0.999; },
+    data => { data.answer_generation.sources.S1.text = "changed"; },
+    data => { data.answer_generation.answer.claims[0].text = "字".repeat(301); },
+    data => { data.answer_generation.answer.claims[0].text = "不能有[S1]"; },
+    data => { data.answer_generation.answer.claims[0].text = "不能\n换行"; },
+    data => { data.answer_generation.answer.claims[0].evidence = Array(4).fill({ source_id: "S1", quote_id: "Q1" }); },
+    data => { data.answer_generation.answer.status = "partial"; },
+    data => { data.answer_generation.answer.missing_info = ["字".repeat(241)]; },
+    data => { data.answer_generation.answer.claims[0].evidence[0].quote_id = "Q999"; },
+    data => { data.request_counts.chat = 2; },
+  ];
+  for (const mutate of mutations) {
+    const invalid = answerFixture(); mutate(invalid);
+    assert.throws(() => ui.validateAnswerData(invalid, original, "synthetic-chat-only"), undefined, mutate.toString());
+  }
+  const invalid = answerFixture();
+  invalid.answer_generation.answer.claims[0].text = "字".repeat(301);
+  sandbox.fetch = async (...args) => { events.fetch.push(args); return { ok: true, json: async () => invalid }; };
+  element("answer-consent").checked = true;
+  await ui.generateAnswer();
+  assert.equal(events.fetch.length, 1);
+  assert.equal(ui.state.data.routes, original.routes);
+  assert.equal(element("answer-result").hidden, true);
+  assert.equal(element("answer-claims").children.length, 0);
+  assert.equal(element("copy-result").disabled, false);
+  assert.ok(!JSON.stringify(ui.state.data).includes("字".repeat(301)));
+});
+
+test("late answer response cannot replace another experiment or expose a stale answer", async () => {
+  const { ui, sandbox, element, events, ready } = uiHarness();
+  ready(beforeAnswer());
+  let resolveResponse;
+  sandbox.fetch = (...args) => { events.fetch.push(args); return new Promise(resolve => { resolveResponse = resolve; }); };
+  element("answer-consent").checked = true;
+  const pending = ui.generateAnswer();
+  ui.state.sequence++;
+  ui.setBusy(false);
+  ui.clearResults();
+  const next = fixture("bm25"); next.query = "a new experiment";
+  ready(next);
+  resolveResponse({ ok: true, json: async () => answerFixture() });
+  await pending;
+  assert.equal(ui.state.data, next);
+  assert.equal(element("answer-result").hidden, true);
+  assert.equal(element("answer-claims").children.length, 0);
+  assert.equal(element("answer-consent").checked, false);
+  assert.equal(events.fetch.length, 1);
 });
 
 test("UI buttons follow completed/current/busy/cleared states and clear old notices on edits", async () => {

@@ -1,4 +1,4 @@
-"""本机检索与重排学习台；只有主动点击云端重排才读取密钥、发送正文。"""
+"""本机检索、重排与证据回答学习台；云端步骤均由用户单独触发。"""
 
 import argparse
 from copy import deepcopy
@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from qa_platform.rag import kubernetes_answer as answering
 from qa_platform.retrieval import kubernetes_hybrid as hybrid
 from qa_platform.retrieval import kubernetes_rerank as reranking
 from qa_platform.settings import DATA_DIR, PROJECT_ROOT
@@ -32,6 +33,10 @@ class ComparisonRequest(BaseModel):
 class RerankRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     experiment_id: str = Field(min_length=1, max_length=64)
+
+
+class AnswerRequest(RerankRequest):
+    model: str = Field(min_length=1, max_length=80)
 
 
 def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
@@ -70,7 +75,10 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
     @app.get("/api/plan")
     def plan():
         try:
-            return {**hybrid.describe(hybrid.prepare(index_dir)), "reranker": reranking.describe()}
+            return {
+                **hybrid.describe(hybrid.prepare(index_dir)),
+                "reranker": reranking.describe(), "answer": answering.describe(),
+            }
         except (ValueError, OSError, KeyError, TypeError):
             raise HTTPException(503, "已有Kubernetes索引或本地语料未就绪；不会自动建库。") from None
 
@@ -163,11 +171,47 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
         finally:
             busy.release()
 
+    @app.post("/api/answer")
+    async def answer(request: Request):
+        nonlocal snapshot
+        payload = await read_payload(
+            request, AnswerRequest, "只接受当前experiment_id和允许的model，不接受问题、正文、地址或密钥。",
+        )
+        if not payload.experiment_id.strip() or payload.model not in answering.MODEL_CONFIGS:
+            raise HTTPException(422, "实验编号不能为空；回答模型必须在允许列表中。")
+        if not busy.acquire(blocking=False):
+            raise HTTPException(409, "已有一轮检索、重排或生成在执行，请等待；不会并发请求模型。")
+        try:
+            if snapshot is None or snapshot["experiment_id"] != payload.experiment_id:
+                raise HTTPException(409, "本轮证据已失效，请重新检索并重排；未请求回答模型。")
+            if "reranker" not in snapshot["routes"]:
+                raise HTTPException(409, "请先完成本轮云端重排；未请求回答模型。")
+            if "answer_generation" in snapshot:
+                if snapshot["answer_generation"]["model"] != payload.model:
+                    raise HTTPException(409, "本轮已有回答；更换模型需重新开始一轮，不会自动新增请求。")
+                return deepcopy(snapshot)
+            result = await run_in_threadpool(answering.generate, deepcopy(snapshot), payload.model)
+            result["experiment_id"] = snapshot["experiment_id"]
+            snapshot = deepcopy(result)
+            return result
+        except HTTPException:
+            raise
+        except Exception as exc:
+            print(f"[回答未完成] {type(exc).__name__}；保留检索与重排，无自动重试。", flush=True)
+            raise HTTPException(
+                503,
+                "回答未完成：模型连接、完整结束、JSON结构或引用校验未通过。"
+                "未展示未经校验的回答，已有检索、重排与证据仍保留；失败请求可能已发生，"
+                "计数仅覆盖已完成阶段。再次主动点击会另发请求，不会自动重试。",
+            ) from None
+        finally:
+            busy.release()
+
     return app
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="本地Kubernetes检索与云端重排对照台")
+    parser = argparse.ArgumentParser(description="本地Kubernetes检索、重排与证据回答学习台")
     parser.add_argument("--port", type=int, default=8766)
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
@@ -177,7 +221,8 @@ def main() -> int:
     print(f"[打开] http://127.0.0.1:{args.port}/；仅本机，不发布。")
     print("[计划] 打开页面0模型；仅BM25=0；三路对照=1次本地问题Embedding+2次身份GET。")
     print("[重排] 三路完成后可主动点击：固定同一并集，读密钥并向云端发送问题与正文，增加1次HTTP；可能收费。")
-    print("[边界] 打开页面/普通检索不读.env、不请求云端；不编码文档、不聊天、不写报告，无自动重试。")
+    print("[回答] 重排完成后另行确认：选前5块生成带引用的回答，增加1次HTTP；可选既有千问或GLM，GLM地址为HTTP明文。")
+    print("[边界] 打开页面/普通检索不读.env、不请求云端；不重编码文档、不执行命令、不写报告，无自动重试。")
     uvicorn.run(create_app(), host="127.0.0.1", port=args.port, access_log=False)
     return 0
 
