@@ -1,4 +1,4 @@
-"""本机检索、重排与证据回答学习台；云端步骤均由用户单独触发。"""
+"""本机检索实验台与一次提问的真实RAG入口；只有主动提交才调用模型。"""
 
 import argparse
 from copy import deepcopy
@@ -26,6 +26,7 @@ EXPORT_SCRIPT = PROJECT_ROOT / "web" / "retrieval_export.js"
 WORKFLOW_PAGE = PROJECT_ROOT / "web" / "workflow_lab.html"
 BRANCHING_PAGE = PROJECT_ROOT / "web" / "branching_lab.html"
 APPROVAL_PAGE = PROJECT_ROOT / "web" / "approval_lab.html"
+QA_PAGE = PROJECT_ROOT / "web" / "qa.html"
 
 
 class ComparisonRequest(BaseModel):
@@ -60,6 +61,13 @@ class ApprovalResumeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     session_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     approved: bool
+
+
+class QARequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    query: str = Field(min_length=1, max_length=2000)
+    model: str = Field(min_length=1, max_length=80)
+    confirmed: bool
 
 
 def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
@@ -98,6 +106,16 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
     @app.get("/")
     def page():
         return FileResponse(PAGE)
+
+    @app.get("/qa")
+    def qa_page():
+        return FileResponse(QA_PAGE)
+
+    @app.get("/api/qa/plan")
+    def qa_plan():
+        from qa_platform.workflows.live_rag import describe
+
+        return describe()  # 不读密钥/索引，不启动图或模型请求。
 
     @app.get("/assets/retrieval_export.js")
     def export_script():
@@ -170,6 +188,33 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
             return model.model_validate(json.loads(body))
         except (ValueError, UnicodeError, ValidationError):
             raise HTTPException(422, error_message) from None
+
+    @app.post("/api/qa")
+    async def qa(request: Request):
+        payload = await read_payload(
+            request, QARequest, "只接受query、允许的model和布尔confirmed；问题须为1～2000字符。",
+        )
+        if not payload.query.strip() or payload.model not in answering.MODEL_CONFIGS or payload.confirmed is not True:
+            raise HTTPException(422, "请输入非空问题、选择允许的模型，并确认本次完整问答的数据发送。")
+        if not busy.acquire(blocking=False):
+            raise HTTPException(409, "已有操作正在执行；本次提问尚未开始，请等待后主动提交。")
+        try:
+            from qa_platform.workflows.live_rag import run
+
+            # 独立的一次执行；不冒充教学回放，也不读写原实验台snapshot。
+            return await run_in_threadpool(run, payload.query, payload.model, index_dir)
+        except Exception as exc:
+            from qa_platform.workflows.live_rag import RAGRunError
+
+            if isinstance(exc, RAGRunError):
+                raise HTTPException(503, str(exc)) from None
+            print(f"[自动问答未完成] {type(exc).__name__}；不自动重试。", flush=True)
+            raise HTTPException(
+                503, "自动问答未完成，请检查索引、LangGraph依赖及模型服务。未展示未经校验的回答；"
+                "请求可能已经发生并产生费用，不自动重试。",
+            ) from None
+        finally:
+            busy.release()
 
     @app.post("/api/workflow/replay")
     async def workflow_replay(request: Request):
@@ -379,7 +424,7 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="本地Kubernetes检索、重排与证据回答学习台")
+    parser = argparse.ArgumentParser(description="本地Kubernetes问答与检索学习台")
     parser.add_argument("--port", type=int, default=8766)
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
@@ -387,6 +432,8 @@ def main() -> int:
     import uvicorn
 
     print(f"[打开] http://127.0.0.1:{args.port}/；仅本机，不发布。")
+    print(f"[问答] http://127.0.0.1:{args.port}/qa；一次提问由LangGraph自动完成真实检索、重排和回答。")
+    print("[问答计划] 主动提交才调用：问题Embedding、云端重排、聊天各1次，另有2次身份GET；不自动重试。")
     print("[计划] 打开页面0模型；仅BM25=0；三路对照=1次本地问题Embedding+2次身份GET。")
     print("[重排] 三路完成后可主动点击：固定同一并集，读密钥并向云端发送问题与正文，增加1次HTTP；可能收费。")
     print("[回答] 重排完成后另行确认：选前5块生成带引用的回答，增加1次HTTP；可选既有千问或GLM，GLM地址为HTTP明文。")

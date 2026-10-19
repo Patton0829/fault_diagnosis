@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>IT 运维知识库</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root { color-scheme: light; --ink: #243747; --muted: #637384; --line: #dce5e9; --accent: #146e65; }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; background: #f5f7f8; color: var(--ink); font: 16px/1.7 system-ui, -apple-system, "PingFang SC", sans-serif; }
+    main { max-width: 840px; margin: auto; padding: 32px 22px 48px; }
+    h1 { margin: 0; font-size: 28px; }
+    h2 { margin: 0; font-size: 21px; }
+    p { margin: 8px 0; }
+    a { color: var(--accent); overflow-wrap: anywhere; }
+    header { margin-bottom: 22px; }
+    header p, .note { color: var(--muted); font-size: 13px; }
+    section, form { padding: 22px; background: white; border: 1px solid var(--line); border-radius: 12px; margin-top: 18px; }
+    label { display: block; font-weight: 600; margin-bottom: 6px; }
+    textarea, select, button { font: inherit; border-radius: 7px; }
+    textarea, select { width: 100%; border: 1px solid #b9cbd1; padding: 10px 12px; background: white; color: var(--ink); }
+    textarea { resize: vertical; min-height: 108px; }
+    .controls { display: flex; align-items: end; gap: 12px; margin-top: 14px; }
+    .model { flex: 1; }
+    button { padding: 11px 26px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; }
+    button:disabled, textarea:disabled, select:disabled { opacity: .55; cursor: default; }
+    button:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid #55b7a9; outline-offset: 3px; }
+    .destination { overflow-wrap: anywhere; margin: 13px 0 8px; }
+    .risk { color: #985122; }
+    #error { padding: 12px; color: #963f32; background: #fff1ed; border: 1px solid #e7c3bb; border-radius: 7px; }
+    #status { min-height: 1.7em; }
+    .answer-heading { display: flex; gap: 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+    .badge { font-size: 13px; padding: 3px 10px; border-radius: 20px; background: #eaf5f1; color: var(--accent); }
+    .claims { padding-left: 24px; }
+    .claims > li { margin: 16px 0; }
+    .claim-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+    details { margin: 7px 0; }
+    summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; border-radius: 6px; background: #f4f7f9; font: 13px/1.8 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .source { border-top: 1px solid var(--line); padding: 12px 0; font-size: 14px; }
+    .source:first-child { border-top: 0; }
+    .source p { margin: 3px 0; }
+    footer { margin-top: 22px; }
+    @media (max-width: 560px) { main { padding: 22px 14px 36px; } section, form { padding: 17px; } .controls { align-items: stretch; flex-direction: column; } button { width: 100%; } h1 { font-size: 25px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>IT 运维知识库</h1>
+    <p>Kubernetes 中文文档 · 一次提问，自动检索、重排并生成带引用的回答。</p>
+    <a href="/">打开检索实验台 →</a>
+  </header>
+
+  <form id="question-form">
+    <label for="query">你想排查什么问题？</label>
+    <textarea id="query" rows="3" maxlength="2000" required disabled placeholder="例如：Pod 里访问服务域名时 DNS 解析失败，应该如何排查？"></textarea>
+    <div class="controls">
+      <div class="model"><label for="model">回答模型</label><select id="model" disabled></select></div>
+      <button id="ask" type="submit" disabled>提问</button>
+    </div>
+    <div class="destination note">
+      <p id="generation-destination">正在读取模型配置；打开页面不会调用模型。</p>
+      <p id="reranker-destination"></p>
+      <p id="transport-notice" class="risk"></p>
+    </div>
+    <p class="note">点击“提问”即同意本次执行：本地问题编码和检索 → 云端重排 → 所选服务生成回答。重排接收问题与候选正文；回答服务接收问题、选定证据及必要的引用/审核标记，可能产生费用。不发送本机路径或向量，不执行文档中的命令，不自动重试。</p>
+    <p id="status" class="note" role="status" aria-live="polite">读取配置中……</p>
+    <p id="error" role="alert" hidden></p>
+  </form>
+
+  <section id="result" hidden aria-labelledby="answer-title">
+    <div class="answer-heading"><h2 id="answer-title">回答</h2><span id="answer-status" class="badge"></span></div>
+    <p id="result-query" class="note"></p>
+    <ol id="claims" class="claims"></ol>
+    <p id="refusal" hidden>现有知识库证据不足，无法据此回答该问题。</p>
+    <div id="missing" hidden><h2>还需补充或核实</h2><ul id="missing-list"></ul></div>
+    <p id="run-summary" class="note"></p>
+    <details><summary>查看来源</summary><div id="sources"></div></details>
+  </section>
+
+  <footer class="note">资料来自固定文档快照，尚未逐条审核，适用版本可能未知。回答与引用检查不等于现场诊断或正确性保证，请核对实际集群信息。此页不保存对话历史。</footer>
+</main>
+<script>
+"use strict";
+const state = { plan: null, busy: false };
+const el = id => document.getElementById(id);
+const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
+const strings = value => Array.isArray(value) && value.every(item => typeof item === "string");
+function requireValue(condition) { if (!condition) throw new Error("服务返回的数据不完整，未展示未经校验的回答。"); }
+function text(tag, content, className) {
+  const node = document.createElement(tag);
+  node.textContent = content;
+  if (className) node.className = className;
+  return node;
+}
+function updateControls() {
+  const disabled = state.busy || !state.plan;
+  for (const id of ["query", "model", "ask"]) el(id).disabled = disabled;
+  el("ask").textContent = state.busy ? "正在回答……" : "提问";
+}
+function clearResult() {
+  el("result").hidden = true;
+  for (const id of ["claims", "missing-list", "sources"]) el(id).replaceChildren();
+  for (const id of ["answer-status", "result-query", "run-summary"]) el(id).textContent = "";
+  el("missing").hidden = true;
+  el("refusal").hidden = true;
+}
+function showError(message) {
+  clearResult();
+  el("error").textContent = message;
+  el("error").hidden = false;
+}
+function validatePlan(data) {
+  requireValue(isObject(data) && data.schema_version === "rag-live-plan/v1" && typeof data.default_model === "string");
+  requireValue(Array.isArray(data.models) && data.models.length > 0 && data.models.every(model => isObject(model) && typeof model.id === "string" && model.id && typeof model.base_url === "string" && typeof model.transport_notice === "string"));
+  requireValue(new Set(data.models.map(model => model.id)).size === data.models.length && data.models.some(model => model.id === data.default_model));
+  requireValue(isObject(data.reranker) && typeof data.reranker.model === "string" && typeof data.reranker.url === "string");
+  requireValue(strings(data.pipeline) && data.pipeline.join(",") === "retrieve,rerank,answer" && typeof data.notice === "string");
+  return data;
+}
+function showDestinations() {
+  if (!state.plan) return;
+  const selected = state.plan.models.find(model => model.id === el("model").value);
+  requireValue(selected);
+  el("generation-destination").textContent = "回答：" + selected.id + " → " + selected.base_url;
+  el("reranker-destination").textContent = "重排：" + state.plan.reranker.model + " → " + state.plan.reranker.url;
+  const insecure = selected.base_url.startsWith("http://") ? "该回答地址使用 HTTP 明文传输：问题与证据可能被网络中的其他参与方读取。" : "";
+  el("transport-notice").textContent = [selected.transport_notice, insecure].filter(Boolean).join(" ");
+}
+async function loadPlan() {
+  try {
+    const response = await fetch("/api/qa/plan", { method: "GET", mode: "same-origin", credentials: "same-origin", cache: "no-store" });
+    if (!response.ok) throw new Error("无法读取问答配置，请检查服务后刷新页面。");
+    const plan = validatePlan(await response.json());
+    state.plan = plan;
+    for (const model of plan.models) {
+      const option = text("option", model.id);
+      option.value = model.id;
+      el("model").append(option);
+    }
+    el("model").value = plan.default_model;
+    showDestinations();
+    el("status").textContent = "已准备好。每次提问：问题编码、重排、回答各1次，另有2次模型身份查询。";
+  } catch (error) {
+    state.plan = null;
+    showError(error instanceof Error ? error.message : "无法读取问答配置，请刷新页面。");
+    el("status").textContent = "配置读取失败，未发起模型请求。";
+  } finally { updateControls(); }
+}
+function validateAnswer(data, query, model) {
+  requireValue(isObject(data) && data.schema_version === "rag-live/v1" && data.query === query && data.model === model);
+  requireValue(strings(data.steps) && data.steps.join(",") === "retrieve,rerank,answer" && Number.isFinite(data.elapsed_seconds) && data.elapsed_seconds >= 0);
+  requireValue(isObject(data.request_counts) && ["embedding", "http", "reranker", "chat"].every(key => Number.isInteger(data.request_counts[key]) && data.request_counts[key] >= 0));
+  requireValue(isObject(data.answer) && ["answered", "partial", "insufficient_evidence"].includes(data.answer.status) && Array.isArray(data.answer.claims) && strings(data.answer.missing_info) && isObject(data.sources));
+  for (const [id, source] of Object.entries(data.sources)) {
+    requireValue(/^S\d+$/.test(id) && isObject(source) && typeof source.chunk_id === "string" && typeof source.text === "string" && isObject(source.quotes) && Object.entries(source.quotes).every(([key, value]) => /^Q\d+$/.test(key) && typeof value === "string" && value.trim().length > 0 && source.text.includes(value)) && isObject(source.metadata));
+  }
+  for (const claim of data.answer.claims) {
+    requireValue(isObject(claim) && typeof claim.text === "string" && Array.isArray(claim.evidence) && claim.evidence.length > 0);
+    for (const citation of claim.evidence) {
+      requireValue(isObject(citation) && typeof citation.source_id === "string" && typeof citation.quote_id === "string" && Object.hasOwn(data.sources, citation.source_id));
+      requireValue(Object.hasOwn(data.sources[citation.source_id].quotes, citation.quote_id));
+    }
+  }
+  if (data.answer.status === "insufficient_evidence") {
+    requireValue(data.answer.claims.length === 0 && data.answer.missing_info.length > 0);
+  } else {
+    requireValue(data.answer.claims.length > 0);
+    if (data.answer.status === "partial") requireValue(data.answer.missing_info.length > 0);
+  }
+  return data;
+}
+function safeSourceUrl(value) {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "github.com" && !url.port && !url.username && !url.password && url.pathname.startsWith("/kubernetes/website/blob/");
+  } catch (_) { return false; }
+}
+function showSources(sources) {
+  // 同一份文档只列一次；仍保留各个引用编号与块身份。
+  const groups = new Map();
+  for (const [id, source] of Object.entries(sources)) {
+    const url = source.metadata.source_url;
+    const key = typeof url === "string" && url ? url : source.chunk_id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ id, source });
+  }
+  if (!groups.size) { el("sources").append(text("p", "本次没有引用来源。", "note")); return; }
+  for (const group of groups.values()) {
+    const metadata = group[0].source.metadata;
+    const card = text("div", "", "source");
+    card.append(text("strong", typeof metadata.title === "string" ? metadata.title : "文档来源"));
+    card.append(text("p", group.map(item => item.id + " · " + item.source.chunk_id).join("；"), "note"));
+    if (typeof metadata.source_url === "string") {
+      const link = text(safeSourceUrl(metadata.source_url) ? "a" : "span", metadata.source_url);
+      if (link.tagName === "A") { link.href = metadata.source_url; link.target = "_blank"; link.rel = "noopener noreferrer"; }
+      const location = text("p", "");
+      location.append(link);
+      card.append(location);
+    }
+    const reviews = [...new Set(group.map(item => item.source.metadata.review_status).filter(item => typeof item === "string"))];
+    card.append(text("p", "审核：" + (reviews.join("、") || "未知") + "；适用版本：" + (typeof metadata.kubernetes_version === "string" ? metadata.kubernetes_version : "未知"), "note"));
+    el("sources").append(card);
+  }
+}
+function renderAnswer(data) {
+  el("answer-status").textContent = { answered: "已回答", partial: "部分回答", insufficient_evidence: "证据不足" }[data.answer.status];
+  el("result-query").textContent = data.query;
+  for (const claim of data.answer.claims) {
+    const item = text("li", "");
+    item.append(text("p", claim.text, "claim-text"));
+    const seen = new Set();
+    for (const citation of claim.evidence) {
+      const key = citation.source_id + "/" + citation.quote_id;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const quote = text("details", "");
+      quote.append(text("summary", "[" + key + "] 查看原文"), text("pre", data.sources[citation.source_id].quotes[citation.quote_id]));
+      item.append(quote);
+    }
+    el("claims").append(item);
+  }
+  el("refusal").hidden = data.answer.status !== "insufficient_evidence";
+  for (const item of data.answer.missing_info) el("missing-list").append(text("li", item));
+  el("missing").hidden = data.answer.missing_info.length === 0;
+  const counts = data.request_counts;
+  el("run-summary").textContent = "检索 → 重排 → 回答已完成 · " + data.elapsed_seconds.toFixed(2) + " 秒 · Embedding " + counts.embedding + " / Reranker " + counts.reranker + " / 聊天 " + counts.chat + "（模型服务 HTTP " + counts.http + "）";
+  showSources(data.sources);
+  el("result").hidden = false;
+}
+async function submitQuestion(event) {
+  event.preventDefault();
+  if (state.busy || !state.plan) return;
+  const query = el("query").value.trim();
+  const model = el("model").value;
+  if (!query) { showError("请先输入问题。"); el("query").focus(); return; }
+  if (query.length > 2000 || !state.plan.models.some(item => item.id === model)) { showError("请检查问题长度与模型选择。"); return; }
+  state.busy = true;
+  clearResult();
+  el("error").hidden = true;
+  el("status").textContent = "正在自动完成检索、重排和回答，请稍候……";
+  updateControls();
+  try {
+    const response = await fetch("/api/qa", {
+      method: "POST", mode: "same-origin", credentials: "same-origin", cache: "no-store",
+      headers: { "Content-Type": "application/json", "X-Retrieval-Lab": "1" },
+      body: JSON.stringify({ query, model, confirmed: true })
+    });
+    if (!response.ok) {
+      let message = "本次问答未完成（HTTP " + response.status + "）。";
+      if (response.status === 503) {
+        try { const failure = await response.json(); if (isObject(failure) && typeof failure.detail === "string") message = failure.detail; } catch (_) { /* 不展示未知错误响应。 */ }
+      }
+      throw new Error(message);
+    }
+    renderAnswer(validateAnswer(await response.json(), query, model));
+    el("status").textContent = "本次执行结束；回答仍需结合实际集群核验。";
+  } catch (error) {
+    showError((error instanceof Error ? error.message : "本次问答未完成。") + " 未展示未完成的回答；模型请求可能已发生并产生费用，不自动重试。");
+    el("status").textContent = "执行未完成。再次点击提问将发起新请求。";
+  } finally { state.busy = false; updateControls(); }
+}
+el("question-form").addEventListener("submit", submitQuestion);
+el("model").addEventListener("change", showDestinations);
+loadPlan();
+</script>
+</body>
+</html>

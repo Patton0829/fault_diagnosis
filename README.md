@@ -2,9 +2,9 @@
 
 本项目通过可运行的对照实验，逐步学习文档清洗、切块、Embedding、BM25、RRF、Reranker、Milvus 和带来源引用的 RAG。最初使用铁路故障诊断测试资料，当前正在接入 Kubernetes 中文文档，构建独立的 IT 运维知识库。
 
-目前，铁路测试库已跑通最小 RAG 与 Milvus 对照链路；Kubernetes 当前11篇、156块已完成本地编码与独立 Milvus 入库，并提供真实问句检索、独立的相邻块上下文补全实验，以及浏览器中的BM25／Dense／RRF、云端重排和带引用回答。**网页按步骤显式运行：打开页面0模型，检索、重排、回答各自主动触发；没有标注评测，不把运行成功等同于答案正确。网页当前不混入上下文补全。**
+目前，铁路测试库已跑通最小 RAG 与 Milvus 对照链路；Kubernetes 当前11篇、156块已完成本地编码与独立 Milvus 入库。**`/qa` 是最小问答入口：一次主动提交，由LangGraph自动完成真实混合检索、云端重排和带引用回答；打开页面0模型请求。** 原 `/` 检索实验台保留分步点击和排序对照。两者都不混入上下文补全；尚无标注质量评测，不把运行成功等同于答案正确。
 
-另有 `/workflow` 线性对照页、`/workflow/branching` 条件分支页与 `/workflow/approval` 人工确认页。后两页只运行LangGraph，按源码阅读顺序学习建图和恢复；尚未替换真实RAG或接入磁盘持久化检查点。
+另有 `/workflow` 线性对照页、`/workflow/branching` 条件分支页与 `/workflow/approval` 人工确认页，均是独立的合成教学实验，不是真实问答入口。真实问答使用三个顺序节点，不加入审批、检查点、多轮会话或自动重试。
 
 ## 目录结构
 
@@ -21,7 +21,7 @@ fault_diagnosis/
 │       ├── retrieval/             # BM25、Dense、RRF和重排流水线
 │       ├── storage/               # 本地编码缓存、Milvus验证/建库/搜索
 │       ├── rag/                   # 回答、引用校验、评测和Milvus对照
-│       ├── workflows/             # 普通函数与LangGraph的零模型编排回放
+│       ├── workflows/             # live_rag.py真实问答；其余为独立合成教学
 │       ├── web_app.py             # 文档处理可视化的后端
 │       └── retrieval_lab.py       # 独立检索学习台，不改变原清洗台的零模型约定
 ├── scripts/                      # 26个运行入口，不承载业务实现
@@ -94,6 +94,31 @@ python -m qa_platform.providers.local_embedding
 ## 常用命令
 
 以下命令在项目根目录执行，均使用指定环境。
+
+### 最小问答入口：一次提问完成真实RAG
+
+```bash
+/Users/patton/miniconda3/envs/langchain/bin/python -B scripts/serve_retrieval_lab.py --port 8766
+```
+
+打开 <http://127.0.0.1:8766/qa>，输入问题、选择回答模型，阅读服务目的地址和费用提示后点击“提问”。原检索实验台仍在 `/`，不需要先运行它。现有Kubernetes索引、本地Embedding服务和云端认证必须已就绪；不会自动编码文档或重建索引。
+
+一次请求执行：`START → retrieve → rerank → answer → END`。
+
+- `retrieve`：复用 `kubernetes_hybrid.prepare/compare`，完成一次问题编码、Milvus/BM25召回和RRF；不重新编码文档。
+- `rerank`：复用 `kubernetes_rerank.rerank`，把两路完整候选并集提交云端，不先截取RRF前5。
+- `answer`：复用 `kubernetes_answer.generate`，选择重排前5、准备段落引用、调用所选模型，再进行JSON结构及引用定位校验。不是直接展示未经校验的流式正文。
+
+正常完成为Embedding、Reranker、聊天各1次，另有2次模型身份GET，共5次模型服务HTTP；本机页面API另计。页面在提交前说明发送的数据和目的地；选择GLM时另显示其HTTP明文传输风险。每次主动提问都是新的一轮，可能收费，不自动重试。任一步失败即停止，页面不保留旧答案冒充新结果，也不把异常显示成正常拒答；证据不足由回答结果明确表达。
+
+核心源码按以下顺序阅读：
+
+1. `src/qa_platform/workflows/live_rag.py`：先读`LiveRAGState`（问题、模型、本轮结果），再读`build_graph`内三个节点和连线，最后读`run`。`run`用实际`stream`事件记录完成步骤；同名`result`字段逐步覆盖为新的结果。关闭LangSmith追踪，无checkpointer、循环或重试；只返回已校验的答案及实际引用来源，不返回本机路径、向量或完整候选池。
+2. `src/qa_platform/retrieval_lab.py`：`GET /qa`提供页面，`GET /api/qa/plan`只提供固定模型配置；`POST /api/qa`接受严格的`query/model/confirmed`，沿用同源JSON、自定义头、16KiB和全服务忙碌锁，再调用真实图。不接收浏览器上传的正文、密钥、路径或服务地址，不改原实验台快照。
+3. `web/qa.html`：读取配置、展示发送范围，主动提交一次请求，用纯文本展示答案、引用与来源。没有对照台、图编辑器、人工审批或会话历史；`web/retrieval_lab.html`只新增入口链接。
+4. `tests/test_live_rag.py`验证真实LangGraph与既有业务函数的连接和API边界；`tests/qa.test.cjs`验证前端状态及安全展示，`tests/test_qa_ui.py`将其纳入pytest。测试使用合成数据和替身，不产生真实模型费用。
+
+这是单机、单轮、当前11篇资料的小规模应用，不等于生产部署。节点运行成功和引用存在都不能证明事实正确、排查完整或版本适用。
 
 ### 查看本地编码计划
 
@@ -572,6 +597,6 @@ v2 的清单记录了迁移前四份规则源码的完整 SHA256。直接更改�
 
 当前学习路线：模型调用 → 文档处理 → BM25／Dense → RRF → Reranker → 最小RAG → 开发回归 → Milvus对照 → Kubernetes语料与可视化 → 本地Embedding小样本 → 编码缓存续跑 → 缓存向量独立入库 → 真实问句检索对照 → 相邻块上下文补全实验 → 全池重排 → 带段落引用回答 → LangGraph最小零模型编排。
 
-当前Kubernetes子集已跑通检索、全池重排与带引用回答；工作流学习页已实现普通函数与LangGraph的最小顺序回放，尚未接管真实RAG。后续仍需人工／标注质量验证、真实RAG图编排、条件分支、多轮会话、跨版本增量更新和正式应用／部署；不把本步线性图视为这些能力已完成。
+当前Kubernetes子集已跑通检索、全池重排与带引用回答，并在`/qa`用真实LangGraph串成一次提交的最小单轮问答。合成学习页独立保留，不继续扩展为问答主流程。近期优先验收能回答的问题、资料不足问题与服务失败，核对实际答案和来源；多轮会话、跨版本增量更新、审批恢复及正式部署均不作为本轮最小版本的必选项。
 
 学习过程中，每增加一份实现文件都说明其输入、输出、职责和调用关系；对比实验应固定控制条件，不将“能运行”“排序一致”或“自动检查通过”直接当作问答正确率。
