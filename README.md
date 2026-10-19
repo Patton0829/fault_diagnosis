@@ -4,7 +4,7 @@
 
 目前，铁路测试库已跑通最小 RAG 与 Milvus 对照链路；Kubernetes 当前11篇、156块已完成本地编码与独立 Milvus 入库，并提供真实问句检索、独立的相邻块上下文补全实验，以及浏览器中的BM25／Dense／RRF、云端重排和带引用回答。**网页按步骤显式运行：打开页面0模型，检索、重排、回答各自主动触发；没有标注评测，不把运行成功等同于答案正确。网页当前不混入上下文补全。**
 
-另有独立的 `/workflow` 线性对照页和简化的 `/workflow/branching` 条件分支页。条件页只运行和展示LangGraph，按明确的源码阅读顺序学习建图；尚未替换真实RAG或接入持久化检查点。
+另有 `/workflow` 线性对照页、`/workflow/branching` 条件分支页与 `/workflow/approval` 人工确认页。后两页只运行LangGraph，按源码阅读顺序学习建图和恢复；尚未替换真实RAG或接入磁盘持久化检查点。
 
 ## 目录结构
 
@@ -428,6 +428,36 @@ Python实现路径相对于 `src/qa_platform/`。检索、重排、回答分步�
 - `tests/branching_lab.test.cjs`、`tests/test_branching_lab_ui.py`：检查场景切换清空旧结果、默认折叠、分支展示、响应校验与安全文本，并接入pytest。
 
 只读计划为`GET /api/workflow/branching/plan`，主动运行是`POST /api/workflow/branching/replay`，请求为`{"scenario":"with_evidence"}`或`{"scenario":"empty_evidence"}`。模型推理及模型服务HTTP仍全部为0；没有接管真实RAG、增加持久化或实现自主Agent。
+
+#### 再下一课：生成前暂停、人工确认与恢复
+
+打开 <http://127.0.0.1:8766/workflow/approval>，仍使用同一个服务和LangGraph 1.2.16。与上一课“执行完后查看轨迹”不同，这次图会**真的暂停**：`retrieve → fuse → rerank → prepare_evidence → review`，`review`内调用`interrupt()`后返回控制权，此时尚无`approved/draft/answer`。
+
+点击“继续”才会向相同的`thread_id`提交`Command(resume=True)`，完成`review → generate → validate → END`；选择取消则提交`False`，走`review → cancel → END`，只有`cancelled=True`，不创建草稿或答案。取消不是证据不足拒答，也不是程序异常。这里的确认只控制合成教学回放，不代表资料审核通过，不授权任何云端调用。
+
+检查暂停、继续后的真实计数：
+
+| 观测对象 | 暂停时 | 继续后 |
+|---|---|---|
+| 前四个节点的完成次数 | 各1次 | 仍各1次，没有重跑 |
+| `review`进入/完成次数 | 1 / 0 | 2 / 1 |
+| `generate`完成次数 | 0 | 1；取消路径仍为0 |
+
+恢复不是从Python函数内部的那一行直接续跑：包含`interrupt`的节点会**从头重新进入**，因此`interrupt`之前的代码会再执行。不要在它之前放不可重复的业务写入或收费请求。本课计数包装器有意记录实际函数进入与正常返回，除此以外没有业务副作用。状态与完成事件来自真实LangGraph `stream`和`get_state`，没有把暂停画面伪造为一次完整回放。[官方中断与恢复说明](https://docs.langchain.com/oss/python/langgraph/interrupts#resuming-interrupts)。
+
+本课使用`InMemorySaver`，检查点只保留在服务进程内存。刷新页面会通过只读接口找回本app当前会话；重启服务、重新开始或运行失败后会话失效。**不是磁盘持久化、断电恢复、多轮对话记忆或多用户会话系统。** 每个app只保留最近一轮，另一标签页重新开始也会使旧编号失效。`thread_id`只是这轮教学图的检查点指针，不是Codex聊天ID。相同编号恢复原检查点，不是把`query`重新提交来启动新图。
+
+主界面只保留开始、继续、取消、当前状态和关键计数。源码与完整状态仍默认折叠，按六步阅读：`ApprovalState → review_evidence → route_after_review → build_graph → ApprovalLesson.start → ApprovalLesson.resume`。重点看`compile(checkpointer=...)`、`interrupt(...)`、同一`thread_id`和`Command(resume=...)`怎样配合；不必一开始就深挖事件记录辅助代码。
+
+新增/修改文件职责：
+
+- `src/qa_platform/workflows/approval.py`：复用原六个节点，加人工确认、取消和内存检查点；单会话管理器控制开始/恢复/只读观察，旧会话及重复恢复被拒绝。真实计数明确区分进入与完成；运行错误使会话失效，不自动重试。
+- `src/qa_platform/retrieval_lab.py`：增加`/workflow/approval`页面与三个本地接口：GET `/api/workflow/approval/state`、POST `/api/workflow/approval/start`（空JSON）、POST `/api/workflow/approval/resume`（当前32位`session_id`及严格布尔`approved`）。沿用同源、自定义头、16KiB和同一个忙碌锁；不修改真实RAG快照。
+- `web/approval_lab.html`：展示真实暂停状态、检查点与执行次数，主动提交决定；刷新只读状态，不自动开始、恢复或重试。`web/branching_lab.html`只加下一课链接。
+- `tests/test_workflow_approval.py`：验证真实中断/恢复、前序不重跑、确认节点重进、取消与重复恢复、只读状态、检查点隔离、零外部调用和API门禁。
+- `tests/approval_lab.test.cjs`、`tests/test_approval_lab_ui.py`：验证按钮状态、暂停/恢复生命周期、旧会话清理、源码顺序与安全展示，并纳入pytest。
+
+所有文档和分数仍为手工合成数据，没有新模型推理、文档编码或数据库操作；没有读取`.env`，没有向LangSmith发送追踪。浏览器与本机服务的HTTP请求不等于模型服务请求。
 
 ### 校验现有 Kubernetes v2 语料
 

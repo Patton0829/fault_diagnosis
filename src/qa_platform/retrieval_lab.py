@@ -25,6 +25,7 @@ PAGE = PROJECT_ROOT / "web" / "retrieval_lab.html"
 EXPORT_SCRIPT = PROJECT_ROOT / "web" / "retrieval_export.js"
 WORKFLOW_PAGE = PROJECT_ROOT / "web" / "workflow_lab.html"
 BRANCHING_PAGE = PROJECT_ROOT / "web" / "branching_lab.html"
+APPROVAL_PAGE = PROJECT_ROOT / "web" / "approval_lab.html"
 
 
 class ComparisonRequest(BaseModel):
@@ -55,12 +56,27 @@ class BranchReplayRequest(BaseModel):
     scenario: Literal["with_evidence", "empty_evidence"]
 
 
+class ApprovalResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    session_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    approved: bool
+
+
 def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
     busy = Lock()
     # 仅保留最近一轮的服务端冻结结果；浏览器不能上传任意正文或路径。
     snapshot = None
+    approval_lesson = None  # 按需创建；只保留本app的一轮合成内存检查点。
+
+    def get_approval_lesson():
+        nonlocal approval_lesson
+        from qa_platform.workflows.approval import ApprovalLesson
+
+        if approval_lesson is None:
+            approval_lesson = ApprovalLesson()
+        return approval_lesson
 
     @app.middleware("http")
     async def local_only(request, call_next):
@@ -108,6 +124,21 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
         from qa_platform.workflows.branching import describe
 
         return describe()
+
+    @app.get("/workflow/approval")
+    def approval_page():
+        return FileResponse(APPROVAL_PAGE)
+
+    @app.get("/api/workflow/approval/state")
+    def approval_state():
+        if not busy.acquire(blocking=False):
+            raise HTTPException(409, "当前有操作正在执行；请稍后刷新，读取不会执行节点。")
+        try:
+            return get_approval_lesson().current()
+        except Exception:
+            raise HTTPException(503, "无法读取本地教学状态；未启动或恢复图，未调用模型。") from None
+        finally:
+            busy.release()
 
     @app.get("/api/plan")
     def plan():
@@ -172,6 +203,39 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
         except Exception as exc:
             print(f"[条件回放未完成] {type(exc).__name__}；未调用模型。", flush=True)
             raise HTTPException(503, "本地条件回放未完成；未调用模型、未自动重试，也未把异常当作正常拒答。") from None
+        finally:
+            busy.release()
+
+    @app.post("/api/workflow/approval/start")
+    async def approval_start(request: Request):
+        await read_payload(request, ReplayRequest, "开始只接受空JSON对象，不接受问题、正文或模型配置。")
+        if not busy.acquire(blocking=False):
+            raise HTTPException(409, "已有操作执行中，未开始新会话。")
+        try:
+            return await run_in_threadpool(get_approval_lesson().start)
+        except Exception as exc:
+            print(f"[确认课件未开始] {type(exc).__name__}；无自动重试。", flush=True)
+            raise HTTPException(503, "本地教学图未成功暂停；未调用模型、未自动重试。") from None
+        finally:
+            busy.release()
+
+    @app.post("/api/workflow/approval/resume")
+    async def approval_resume(request: Request):
+        payload = await read_payload(request, ApprovalResumeRequest, "只接受当前32位session_id和布尔approved，不接受其他参数。")
+        if not busy.acquire(blocking=False):
+            raise HTTPException(409, "已有操作执行中，未提交恢复。")
+        try:
+            from qa_platform.workflows.approval import ApprovalConflict
+
+            try:
+                return await run_in_threadpool(get_approval_lesson().resume, payload.session_id, payload.approved)
+            except ApprovalConflict:
+                raise HTTPException(409, "会话已失效或不在等待确认；请刷新查看或重新开始，不能重复恢复。") from None
+        except HTTPException:
+            raise
+        except Exception as exc:
+            print(f"[确认课件未恢复] {type(exc).__name__}；无自动重试。", flush=True)
+            raise HTTPException(503, "本地恢复未完成，会话已失效；可能已执行部分节点，请重新开始。未调用模型、未自动重试。") from None
         finally:
             busy.release()
 
