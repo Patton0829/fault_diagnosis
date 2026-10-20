@@ -233,6 +233,7 @@ def test_generation_sends_only_five_frozen_sources_once_and_validates_answer(mod
     config = answering.MODEL_CONFIGS[model]
     assert sdk_options[0] == {"api_key": "not-needed" if model == "glm" else "synthetic-credential",
                               "base_url": config["base_url"], "timeout": 60.0,
+                              "organization": "", "project": "",
                               "max_retries": 0, "http_client": clients[0]}
     request = sent[0]
     assert request.method == "POST" and str(request.url) == config["base_url"] + "/chat/completions"

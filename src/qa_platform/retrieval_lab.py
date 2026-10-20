@@ -68,6 +68,7 @@ class QARequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     model: str = Field(min_length=1, max_length=80)
     confirmed: bool
+    mode: Literal["single", "agent"] = "single"
 
 
 def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
@@ -192,21 +193,30 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
     @app.post("/api/qa")
     async def qa(request: Request):
         payload = await read_payload(
-            request, QARequest, "只接受query、允许的model和布尔confirmed；问题须为1～2000字符。",
+            request, QARequest, "只接受query、允许的model、布尔confirmed及可选single/agent模式；问题须为1～2000字符。",
         )
         if not payload.query.strip() or payload.model not in answering.MODEL_CONFIGS or payload.confirmed is not True:
             raise HTTPException(422, "请输入非空问题、选择允许的模型，并确认本次完整问答的数据发送。")
+        if payload.mode == "agent":
+            from qa_platform.workflows.agent_rag import ENABLED_MODELS
+
+            if payload.model not in ENABLED_MODELS:
+                raise HTTPException(422, "多步检索暂仅支持已验证原生工具协议的qwen3.8-flash，未请求模型。")
         if not busy.acquire(blocking=False):
             raise HTTPException(409, "已有操作正在执行；本次提问尚未开始，请等待后主动提交。")
         try:
-            from qa_platform.workflows.live_rag import run
+            if payload.mode == "agent":
+                from qa_platform.workflows.agent_rag import run
+            else:
+                from qa_platform.workflows.live_rag import run
 
             # 独立的一次执行；不冒充教学回放，也不读写原实验台snapshot。
             return await run_in_threadpool(run, payload.query, payload.model, index_dir)
         except Exception as exc:
+            from qa_platform.workflows.agent_rag import AgentRunError
             from qa_platform.workflows.live_rag import RAGRunError
 
-            if isinstance(exc, RAGRunError):
+            if isinstance(exc, (RAGRunError, AgentRunError)):
                 raise HTTPException(503, str(exc)) from None
             print(f"[自动问答未完成] {type(exc).__name__}；不自动重试。", flush=True)
             raise HTTPException(
@@ -433,7 +443,8 @@ def main() -> int:
 
     print(f"[打开] http://127.0.0.1:{args.port}/；仅本机，不发布。")
     print(f"[问答] http://127.0.0.1:{args.port}/qa；一次提问由LangGraph自动完成真实检索、重排和回答。")
-    print("[问答计划] 主动提交才调用：问题Embedding、云端重排、聊天各1次，另有2次身份GET；不自动重试。")
+    print("[问答计划] 默认单次：问题Embedding、云端重排、聊天各1次，另有2次身份GET。")
+    print("[多步可选] Flash原生工具循环：最多2次检索；Embedding2/重排2/聊天3，共最多11次HTTP；不自动重试。")
     print("[计划] 打开页面0模型；仅BM25=0；三路对照=1次本地问题Embedding+2次身份GET。")
     print("[重排] 三路完成后可主动点击：固定同一并集，读密钥并向云端发送问题与正文，增加1次HTTP；可能收费。")
     print("[回答] 重排完成后另行确认：选前5块生成带引用的回答，增加1次HTTP；可选既有千问或GLM，GLM地址为HTTP明文。")

@@ -77,12 +77,14 @@ class RAGRunError(RuntimeError):
 
 def describe() -> dict:
     """打开页面只读固定配置，不加载密钥、索引或模型客户端。"""
+    from qa_platform.workflows.agent_rag import describe as describe_agent
+
     config = answering.describe()
     return {
         "schema_version": "rag-live-plan/v1",
         "default_model": config["default_model"], "models": config["models"],
         "reranker": {key: reranking.describe()[key] for key in ("model", "url")},
-        "pipeline": list(PIPELINE), "notice": NOTICE,
+        "pipeline": list(PIPELINE), "notice": NOTICE, "agent": describe_agent(),
     }
 
 

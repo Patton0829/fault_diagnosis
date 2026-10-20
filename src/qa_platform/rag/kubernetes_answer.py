@@ -9,7 +9,7 @@ from openai import OpenAI
 
 from qa_platform.ingestion.embedding_plan import require
 from qa_platform.providers.chat import DEFAULT_MODEL, MODEL_CONFIGS
-from qa_platform.rag.answering import build_quotes, generate_answer
+from qa_platform.rag.answering import GroundedAnswer, build_quotes, generate_answer
 from qa_platform.rag.quote_units import (
     LINE_STRATEGY, MAX_QUOTE_CHARS, PARAGRAPH_STRATEGY, paragraph_units,
 )
@@ -185,14 +185,16 @@ def prepare_quote_comparison(result: dict) -> dict:
     }
 
 
-def generate(
-    result: dict, model: str = DEFAULT_MODEL, *, client_factory=None,
+def call_answer(
+    query: str, sources: dict[str, RerankedHit], model: str = DEFAULT_MODEL, *, client_factory=None,
     http_client_factory=None, api_key_loader=None,
-) -> dict:
+) -> GroundedAnswer:
+    """共用单次回答调用；调用前先验证证据，沿用原JSON和引用校验。"""
     require(model in MODEL_CONFIGS, "回答模型不在允许列表")
-    sources = _sources(result)
-    evidence = _evidence(result, sources)  # 引用可构造性也须在读取密钥前检查。
-    comparison = prepare_quote_comparison(result)
+    require(isinstance(query, str) and bool(query.strip()), "回答问题不能为空")
+    require(isinstance(sources, dict) and 1 <= len(sources) <= MAX_SOURCES, "回答证据数量无效")
+    for hit in sources.values():
+        build_quotes(hit)  # 引用可构造性也须在读取密钥前检查。
     key = (api_key_loader or load_chat_key)(model)
     require(isinstance(key, str) and bool(key.strip()), "回答服务认证未就绪")
     config = MODEL_CONFIGS[model]
@@ -204,12 +206,26 @@ def generate(
     ) as transport:
         with (client_factory or OpenAI)(
             api_key=key, base_url=config["base_url"], timeout=60.0,
-            max_retries=0, http_client=transport,
+            organization="", project="", max_retries=0, http_client=transport,
         ) as client:
-            answer = generate_answer(
-                client, result["query"], sources, model, MAX_TOKENS,
+            return generate_answer(
+                client, query, sources, model, MAX_TOKENS,
                 system_suffix=SYSTEM_SUFFIX,
             )
+
+
+def generate(
+    result: dict, model: str = DEFAULT_MODEL, *, client_factory=None,
+    http_client_factory=None, api_key_loader=None,
+) -> dict:
+    require(model in MODEL_CONFIGS, "回答模型不在允许列表")
+    sources = _sources(result)
+    evidence = _evidence(result, sources)
+    comparison = prepare_quote_comparison(result)
+    answer = call_answer(
+        result["query"], sources, model, client_factory=client_factory,
+        http_client_factory=http_client_factory, api_key_loader=api_key_loader,
+    )
     output = deepcopy(result)
     output["quote_comparison"] = comparison
     output["answer_generation"] = {

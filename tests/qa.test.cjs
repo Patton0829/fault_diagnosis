@@ -31,11 +31,25 @@ function result() {
       metadata: { title: "合成文档 <img onerror=alert(1)>", section_path: ["DNS"], source_url: SOURCE,
         review_status: "unreviewed_official_document" } } } };
 }
+function agentPlan() {
+  return { ...plan(), agent: { enabled_models: [MODEL], max_tool_calls: 2, notice: "只读知识库工具，无自动重试。",
+    max_request_counts: { embedding: 2, reranker: 2, chat: 3, http: 11 } } };
+}
+function agentResult(count = 1) {
+  const data = result(); data.mode = "agent";
+  data.agent = { max_tool_calls: 2, tool_calls: Array.from({ length: count }, (_, i) => ({ id: "call-" + i,
+    name: "search_knowledge", query: i ? "跨命名空间查询" : QUERY, evidence_ids: ["synthetic-dns"] })),
+    planner_calls: count ? 2 : 1, stop_reason: count === 2 ? "tool_budget_reached" : "model_finished" };
+  data.steps = count === 0 ? ["plan", "answer"] : count === 1 ? ["plan", "search", "plan", "answer"] : ["plan", "search", "plan", "search", "answer"];
+  data.request_counts = { embedding: count, reranker: count, chat: count ? 3 : 1, http: count ? count * 4 + 3 : 1 };
+  if (!count) { data.answer = { status: "insufficient_evidence", claims: [], missing_info: ["没有工具证据，不能作答。"] }; data.sources = {}; }
+  return data;
+}
 
 class Element {
   constructor(tag = "div") {
     this.tagName = tag.toUpperCase(); this.children = []; this._text = ""; this.value = "";
-    this.listeners = {}; this.hidden = false; this.disabled = false; this.focused = false;
+    this.listeners = {}; this.hidden = false; this.disabled = false; this.focused = false; this.checked = false;
   }
   set textContent(value) { this._text = String(value); this.children = []; }
   get textContent() { return this._text + this.children.map(child => child.textContent).join(""); }
@@ -180,4 +194,91 @@ test("empty, overlong and unknown-model inputs are rejected before any model req
     const h = await ready(); h.get("query").value = query; h.get("model").value = model; await h.submit();
     assert.equal(h.calls.length, 1); assert.equal(h.get("error").hidden, false); assert.equal(h.get("result").hidden, true);
   }
+});
+
+test("multi-step is opt-in and an older plan remains a usable single-run plan", async () => {
+  const old = await ready(); assert.equal(old.get("agent-mode").checked, false); assert.equal(old.get("agent-mode").disabled, true);
+  await old.submit(); assert.equal(JSON.parse(old.calls[1].options.body).mode, undefined);
+  const h = await ready({ initial: agentPlan() }); assert.equal(h.get("agent-mode").checked, false);
+  assert.equal(h.get("agent-mode").disabled, false); assert.equal(h.calls.length, 1);
+  await h.submit(); assert.deepEqual(JSON.parse(h.calls[1].options.body), { query: QUERY, model: MODEL, confirmed: true });
+});
+
+test("selecting multi-step discloses its extra recipient and request budget without sending a request", async () => {
+  const h = await ready({ initial: agentPlan() }); h.get("agent-mode").checked = true; h.get("agent-mode").listeners.change();
+  const notice = h.get("agent-notice").textContent;
+  for (const fragment of ["工具定义", "子查询", "前5块正文", "必要审核标记", "不发送本机路径或向量", "HTTP 最多11次", "不是多轮聊天", "额外费用"]) assert(notice.includes(fragment));
+  assert.equal(h.calls.length, 1);
+});
+
+test("one opted-in submit sends agent mode and displays only actual search queries", async () => {
+  for (const count of [0, 1, 2]) {
+    const h = await ready({ initial: agentPlan(), response: agentResult(count) }); h.get("agent-mode").checked = true; await h.submit();
+    assert.deepEqual(JSON.parse(h.calls[1].options.body), { query: QUERY, model: MODEL, confirmed: true, mode: "agent" });
+    assert.equal(h.get("result").hidden, false); assert.equal(h.get("error").hidden, true);
+    assert(h.get("run-summary").textContent.startsWith("多步检索流程已结束"));
+    assert(h.get("run-summary").textContent.includes("工具检索 " + count + "/2，决策 " + (count ? 2 : 1) + "次"));
+    assert.equal(h.get("agent-searches").hidden, count === 0); assert.equal(h.get("agent-query-list").children.length, count);
+    if (count) assert(h.get("agent-query-list").textContent.includes(QUERY));
+    assert.equal(h.calls.length, 2);
+  }
+});
+
+test("switching away from Flash disables and clears the multi-step choice without requests", async () => {
+  const h = await ready({ initial: agentPlan() }); h.get("agent-mode").checked = true;
+  h.get("model").value = "glm-4.7"; h.get("model").listeners.change();
+  assert.equal(h.get("agent-mode").checked, false); assert.equal(h.get("agent-mode").disabled, true);
+  assert(h.get("agent-notice").textContent.includes("暂仅支持 qwen3.8-flash"));
+  h.get("model").value = MODEL; h.get("model").listeners.change();
+  assert.equal(h.get("agent-mode").checked, false); assert.equal(h.get("agent-mode").disabled, false); assert.equal(h.calls.length, 1);
+});
+
+test("an unsupported programmatic multi-step choice is rejected before POST", async () => {
+  const h = await ready({ initial: agentPlan() }); h.get("model").value = "glm-4.7"; h.get("agent-mode").checked = true;
+  await h.submit(); assert.equal(h.calls.length, 1); assert.equal(h.get("error").hidden, false);
+});
+
+test("pending multi-step disables its checkbox, prevents duplicates and clears old search details", async () => {
+  const h = await ready({ initial: agentPlan(), response: agentResult(2), deferred: true });
+  h.eval(`renderAnswer(${JSON.stringify(agentResult(1))})`); h.get("agent-mode").checked = true;
+  const pending = h.submit(); assert.equal(h.get("agent-mode").disabled, true);
+  assert.equal(h.get("agent-searches").hidden, true); assert.equal(h.get("agent-query-list").textContent, "");
+  for (const id of ["query", "model", "ask"]) assert.equal(h.get(id).disabled, true);
+  await h.submit(); assert.equal(h.calls.length, 2); h.finish(); await pending;
+  assert.equal(h.get("agent-mode").disabled, false); assert.equal(h.get("result").hidden, false);
+});
+
+test("agent response contracts reject wrong modes, sequences, budgets and tool metadata without stale output", async () => {
+  const cases = [result()];
+  const edit = mutator => { const data = agentResult(1); mutator(data); cases.push(data); };
+  edit(data => { delete data.mode; });
+  edit(data => { data.steps = ["plan", "answer"]; });
+  edit(data => { data.agent.max_tool_calls = 3; });
+  edit(data => { data.agent.planner_calls = 1; });
+  edit(data => { data.agent.stop_reason = "tool_budget_reached"; });
+  edit(data => { data.agent.tool_calls[0].name = "run_shell"; });
+  edit(data => { data.agent.tool_calls[0].query = " "; });
+  edit(data => { data.agent.tool_calls[0].evidence_ids = [""]; });
+  edit(data => { data.agent.tool_calls.push(clone(data.agent.tool_calls[0])); });
+  for (const key of ["embedding", "reranker", "chat", "http"]) edit(data => { data.request_counts[key] = { embedding: 3, reranker: 3, chat: 4, http: 12 }[key]; });
+  const unsupportedAnswer = agentResult(0); unsupportedAnswer.answer = result().answer; unsupportedAnswer.sources = result().sources; cases.push(unsupportedAnswer);
+  for (const response of cases) {
+    const h = await ready({ initial: agentPlan(), response }); h.eval(`renderAnswer(${JSON.stringify(agentResult(1))})`);
+    h.get("agent-mode").checked = true; await h.submit();
+    assert.equal(h.calls.length, 2); assert.equal(h.get("result").hidden, true); assert.equal(h.get("error").hidden, false);
+    assert.equal(h.get("agent-query-list").textContent, ""); assert.equal(h.get("claims").textContent, "");
+    assert(h.get("error").textContent.includes("不自动重试"));
+  }
+});
+
+test("an agent result cannot impersonate an unselected single-run response", async () => {
+  const h = await ready({ initial: agentPlan(), response: agentResult(1) }); await h.submit();
+  assert.equal(h.get("result").hidden, true); assert.equal(h.get("error").hidden, false);
+});
+
+test("agent search query strings remain literal text", async () => {
+  const response = agentResult(1); response.agent.tool_calls[0].query = "<img src=x onerror=alert(1)>";
+  const h = await ready({ initial: agentPlan(), response }); h.get("agent-mode").checked = true; await h.submit();
+  assert(h.get("agent-query-list").textContent.includes("<img src=x onerror=alert(1)>"));
+  assert.equal(h.get("agent-query-list").querySelectorAll("img").length, 0);
 });

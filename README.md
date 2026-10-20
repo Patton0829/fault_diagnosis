@@ -4,7 +4,7 @@
 
 目前，铁路测试库已跑通最小 RAG 与 Milvus 对照链路；Kubernetes 当前11篇、156块已完成本地编码与独立 Milvus 入库。**`/qa` 是最小问答入口：一次主动提交，由LangGraph自动完成真实混合检索、云端重排和带引用回答；打开页面0模型请求。** 原 `/` 检索实验台保留分步点击和排序对照。两者都不混入上下文补全；尚无标注质量评测，不把运行成功等同于答案正确。
 
-另有 `/workflow` 线性对照页、`/workflow/branching` 条件分支页与 `/workflow/approval` 人工确认页，均是独立的合成教学实验，不是真实问答入口。真实问答使用三个顺序节点，不加入审批、检查点、多轮会话或自动重试。
+另有 `/workflow` 线性对照页、`/workflow/branching` 条件分支页与 `/workflow/approval` 人工确认页，均是独立的合成教学实验，不是真实问答入口。真实问答默认使用三个顺序节点；可选“多步检索”进入最多两次的真实工具循环。不加入审批、检查点、多轮会话或自动重试。
 
 ## 实习项目复现的总体进度
 
@@ -14,7 +14,7 @@
 | --- | --- |
 | ① 文档处理与检索 | 已有清洗、切块、Embedding、Milvus和混合检索；多格式解析、跨版本增量更新及正式评测仍待补 |
 | ② 单轮RAG | 已有真实检索、重排、结构化回答、来源引用、拒答及简单页面 |
-| ③ LangGraph辅助诊断 | 当前阶段：已有三个真实顺序节点；原生Tool Calling合成验证通过，真实工具循环、多步检索及多轮上下文尚未完成 |
+| ③ LangGraph辅助诊断 | 当前阶段：已有真实单轮图、原生Tool Calling验证与最多两次真实知识工具循环；多轮上下文和更多诊断工具仍待补 |
 | ④ 平台工程、部署与评测 | 已有FastAPI基础；SSE、MySQL/SQLAlchemy、Redis、vLLM、Docker Compose及系统化质量评测尚未完成 |
 
 保持简单页面，逐步补齐核心能力；教学分支/审批回放不能当作真实Agent已经完成。当前使用Kubernetes文档复现技术路线，不把它表述为真实铁路故障知识或已部署的现场诊断系统。
@@ -34,7 +34,7 @@ fault_diagnosis/
 │       ├── retrieval/             # BM25、Dense、RRF和重排流水线
 │       ├── storage/               # 本地编码缓存、Milvus验证/建库/搜索
 │       ├── rag/                   # 回答、引用校验、评测和Milvus对照
-│       ├── workflows/             # live_rag.py真实问答；其余为独立合成教学
+│       ├── workflows/             # live_rag.py单轮；agent_rag.py工具循环；其余为合成教学
 │       ├── web_app.py             # 文档处理可视化的后端
 │       └── retrieval_lab.py       # 独立检索学习台，不改变原清洗台的零模型约定
 ├── scripts/                      # 运行入口，不承载业务实现
@@ -127,7 +127,7 @@ python -m qa_platform.providers.local_embedding
 核心源码按以下顺序阅读：
 
 1. `src/qa_platform/workflows/live_rag.py`：先读`LiveRAGState`（问题、模型、本轮结果），再读`build_graph`内三个节点和连线，最后读`run`。`run`用实际`stream`事件记录完成步骤；同名`result`字段逐步覆盖为新的结果。关闭LangSmith追踪，无checkpointer、循环或重试；只返回已校验的答案及实际引用来源，不返回本机路径、向量或完整候选池。
-2. `src/qa_platform/retrieval_lab.py`：`GET /qa`提供页面，`GET /api/qa/plan`只提供固定模型配置；`POST /api/qa`接受严格的`query/model/confirmed`，沿用同源JSON、自定义头、16KiB和全服务忙碌锁，再调用真实图。不接收浏览器上传的正文、密钥、路径或服务地址，不改原实验台快照。
+2. `src/qa_platform/retrieval_lab.py`：`GET /qa`提供页面，`GET /api/qa/plan`只提供固定模型配置；`POST /api/qa`接受严格的`query/model/confirmed`及可选`mode`（默认`single`），沿用同源JSON、自定义头、16KiB和全服务忙碌锁，再调用真实图。不接收浏览器上传的正文、密钥、路径或服务地址，不改原实验台快照。
 3. `web/qa.html`：读取配置、展示发送范围，主动提交一次请求，用纯文本展示答案、引用与来源。没有对照台、图编辑器、人工审批或会话历史；`web/retrieval_lab.html`只新增入口链接。
 4. `tests/test_live_rag.py`验证真实LangGraph与既有业务函数的连接和API边界；`tests/qa.test.cjs`验证前端状态及安全展示，`tests/test_qa_ui.py`将其纳入pytest。测试使用合成数据和替身，不产生真实模型费用。
 
@@ -174,7 +174,45 @@ python -B scripts/check_tool_calling.py --run
 
 2026-10-20，既有`qwen3.8-flash`服务的本次合成验证通过：结束原因依次为`tool_calls`和`stop`，本地生成与最终返回的随机串一致；共2次聊天HTTP，10.18秒，无重试。未真实验证Max或GLM。`--model`可选择既有模型；GLM目前是HTTP明文，仅应发送合成资料。
 
-能力结论仅适用于所选模型、地址、参数和本次样例；未验证流式工具、复杂参数、真实RAG工具或LangGraph工具循环。失败时仅记录固定阶段和请求尝试数，不展示未经校验的正文，也不据此断言服务一定不支持。接下来把合成工具替换为`search_knowledge`，复用已有混合检索和重排，再接入有次数上限的真实LangGraph工具循环。
+该探针的结论仅适用于所选模型、地址、参数和本次样例；它本身未验证流式工具、复杂参数或真实RAG。失败时仅记录固定阶段和请求尝试数，不展示未经校验的正文，也不据此断言服务一定不支持。真实知识工具循环见下一节。
+
+### 第3阶段：真实知识工具与有上限的多步检索
+
+在同一 `/qa` 页面选择 `qwen3.8-flash`，勾选默认未选中的“多步检索（最多2次）”后提问。不勾选仍走原来的三个顺序节点，Max/GLM也仍可用于原单轮模式；目前只有Flash经过原生工具协议实测，因此多步暂不开放其他模型。
+
+这次变化不是把固定流程再包一次：`plan`节点调用模型，模型通过标准`tool_calls`提出`search_knowledge(query)`；`search`节点校验名称与参数，执行既有混合检索和重排，再用对应`tool_call_id`返回工具消息。模型读取第一次结果后可决定再查不同的问题，或停止。路线为：
+
+```text
+START → plan ──提出合法工具调用──→ search
+          ↑                        │
+          └────已检索1次，再决策────┘
+          │                        │
+          └─停止──→ answer ←─已检索2次，到达上限
+                      ↓
+                     END
+```
+
+第二次检索后直接进入独立的引用回答节点，不再调用第三次决策。规划器普通文字从不当作答案展示，最终生成只接收原问题及合并证据。两轮证据按各轮名次轮流取、按块ID去重，最多5块；不同子问题的重排分数不混排。两轮必须保持相同正文、向量与Embedding合同，不重新编码文档、不补相邻上下文。此选择策略并不保证最优，也不等于回答已涵盖所有子问题。
+
+| 实际路径 | 问题Embedding | 重排 | 聊天（决策+最终生成） | 模型服务HTTP |
+| --- | --- | --- | --- | --- |
+| 模型不调用工具，程序本地证据不足拒答 | 0 | 0 | 1+0 | 1 |
+| 检索1次后模型停止，再生成 | 1 | 1 | 2+1 | 7 |
+| 检索2次后程序收束，再生成 | 2 | 2 | 2+1 | 11 |
+
+表中为正常完成路径，HTTP包含每次问题编码前后的两次模型身份GET；失败可能更少。不自动重试、不回退单轮；非法工具、参数、重复查询或协议截断直接停止。`recursion_limit`是额外防护，实际两次预算由图内条件与计数控制，不靠模型自行遵守。
+
+发送范围也增加：规划服务接收原问题、工具说明及第一次返回的前5块正文、引用片段和必要测试/审核标记；每轮子查询发给自部署Embedding和云端重排；最终回答服务接收原问题及合并后的证据。不外发本机路径、向量或完整元数据，不执行文档命令，不保存会话或外发追踪。多步可能更慢、更贵，不保证优于单次检索；这是**单次提问内多步检索，不是多轮对话记忆**。
+
+核心代码建议按以下顺序阅读：
+
+1. `src/qa_platform/retrieval/knowledge_tool.py`：先看`SearchArgs/TOOLS`（模型可调用什么），再看`search_knowledge`（复用真实检索和重排），最后看`tool_reply/merge_sources`（最小工具消息与跨轮合并）。函数定义与工具schema都不会自行执行检索。
+2. `src/qa_platform/workflows/agent_rag.py`：按`AgentState → build_graph`内`plan → search → answer → after_plan/after_search → add_node/add_conditional_edges → run`阅读。状态中的`messages`服务于本次决策，`rounds`保留本次两轮证据，`counts`统计实际成功完成的请求。`run`读取实际图事件，不编造执行步骤。
+3. `src/qa_platform/rag/kubernetes_answer.py`：`call_answer`共用既有JSON与引用校验；原`generate`也调用它，避免两种模式各写一份生成逻辑。SDK显式清空OpenAI组织/项目环境标识，不把它们带往第三方服务。
+4. `src/qa_platform/retrieval_lab.py`与`web/qa.html`：后端仅按`mode`选择真实图；前端只新增一个选项和折叠的“本次检索”子查询列表，失败清空旧答案。
+5. `tests/test_agent_rag.py`与`tests/qa.test.cjs`：用真实LangGraph、SDK内存HTTP及合成检索替身验证0/1/2次路径、原生工具消息、证据保留、预算和界面边界；不将替身测试冒充真实模型验收。
+
+2026-10-20，通过真实浏览器在`/qa`主动执行了一次复合DNS问题。Flash实际先检索“跨命名空间访问 Service 域名格式 namespace.svc.cluster.local DNS 解析失败”，再检索“Pod dnsPolicy dnsConfig 自定义 DNS 配置 resolv.conf search nameserver ndots 相对名称解析失败”；两轮后回答为`answered`、3个带引用要点，页面显示100.26秒、Embedding2/重排2/聊天3/HTTP11。没有重新编码文档或自动重试。本次是技术闭环验收，未据此认定回答完全正确或优于单次检索。单轮模型限制、多步选择及提交中的控件禁用也在浏览器核对；0/1次路径和失败场景通过离线替身验证，不冒充真实服务实测。全量离线测试708项通过，另有4项既有依赖警告；本机验收摘要与截图保存在`reports/agent-rag-acceptance-2026-10-20.*`，不提交Git。
 
 ### 查看本地编码计划
 

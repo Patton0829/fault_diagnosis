@@ -24,9 +24,11 @@
     textarea { resize: vertical; min-height: 108px; }
     .controls { display: flex; align-items: end; gap: 12px; margin-top: 14px; }
     .model { flex: 1; }
+    .agent-choice { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-weight: 500; }
+    .agent-choice input { width: 17px; height: 17px; }
     button { padding: 11px 26px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; }
-    button:disabled, textarea:disabled, select:disabled { opacity: .55; cursor: default; }
-    button:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid #55b7a9; outline-offset: 3px; }
+    button:disabled, textarea:disabled, select:disabled, input:disabled { opacity: .55; cursor: default; }
+    button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid #55b7a9; outline-offset: 3px; }
     .destination { overflow-wrap: anywhere; margin: 13px 0 8px; }
     .risk { color: #985122; }
     #error { padding: 12px; color: #963f32; background: #fff1ed; border: 1px solid #e7c3bb; border-radius: 7px; }
@@ -61,6 +63,8 @@
       <div class="model"><label for="model">回答模型</label><select id="model" disabled></select></div>
       <button id="ask" type="submit" disabled>提问</button>
     </div>
+    <label class="agent-choice"><input id="agent-mode" type="checkbox" disabled>多步检索（最多2次）</label>
+    <p id="agent-notice" class="note">正在读取多步检索配置。</p>
     <div class="destination note">
       <p id="generation-destination">正在读取模型配置；打开页面不会调用模型。</p>
       <p id="reranker-destination"></p>
@@ -78,6 +82,7 @@
     <p id="refusal" hidden>现有知识库证据不足，无法据此回答该问题。</p>
     <div id="missing" hidden><h2>还需补充或核实</h2><ul id="missing-list"></ul></div>
     <p id="run-summary" class="note"></p>
+    <details id="agent-searches" hidden><summary>本次检索</summary><ol id="agent-query-list"></ol></details>
     <details><summary>查看来源</summary><div id="sources"></div></details>
   </section>
 
@@ -99,14 +104,18 @@ function text(tag, content, className) {
 function updateControls() {
   const disabled = state.busy || !state.plan;
   for (const id of ["query", "model", "ask"]) el(id).disabled = disabled;
+  const supported = agentSupported();
+  el("agent-mode").disabled = disabled || !supported;
+  if (!supported) el("agent-mode").checked = false;
   el("ask").textContent = state.busy ? "正在回答……" : "提问";
 }
 function clearResult() {
   el("result").hidden = true;
-  for (const id of ["claims", "missing-list", "sources"]) el(id).replaceChildren();
+  for (const id of ["claims", "missing-list", "sources", "agent-query-list"]) el(id).replaceChildren();
   for (const id of ["answer-status", "result-query", "run-summary"]) el(id).textContent = "";
   el("missing").hidden = true;
   el("refusal").hidden = true;
+  el("agent-searches").hidden = true;
 }
 function showError(message) {
   clearResult();
@@ -119,7 +128,24 @@ function validatePlan(data) {
   requireValue(new Set(data.models.map(model => model.id)).size === data.models.length && data.models.some(model => model.id === data.default_model));
   requireValue(isObject(data.reranker) && typeof data.reranker.model === "string" && typeof data.reranker.url === "string");
   requireValue(strings(data.pipeline) && data.pipeline.join(",") === "retrieve,rerank,answer" && typeof data.notice === "string");
+  if (data.agent !== undefined) {
+    requireValue(isObject(data.agent) && strings(data.agent.enabled_models) && data.agent.enabled_models.length > 0 && data.agent.enabled_models.every(id => data.models.some(model => model.id === id)));
+    requireValue(data.agent.max_tool_calls === 2 && typeof data.agent.notice === "string" && isObject(data.agent.max_request_counts));
+    requireValue(["embedding", "reranker", "chat", "http"].every(key => data.agent.max_request_counts[key] === { embedding: 2, reranker: 2, chat: 3, http: 11 }[key]));
+  }
   return data;
+}
+function agentSupported() {
+  return !!(state.plan && state.plan.agent && state.plan.agent.enabled_models.includes(el("model").value));
+}
+function showAgentNotice() {
+  if (!agentSupported()) {
+    el("agent-notice").textContent = "当前模型未验证多步工具调用；使用单次检索流程。多步检索暂仅支持 qwen3.8-flash。";
+  } else if (!el("agent-mode").checked) {
+    el("agent-notice").textContent = "可选：让模型决定检索什么、是否再查一次；不是多轮聊天。未选中时保持原流程。";
+  } else {
+    el("agent-notice").textContent = "所选回答服务额外接收问题、工具定义、子查询及每次前5块正文和必要审核标记，决定是否继续检索；不发送本机路径或向量。最多2轮：Embedding 2 / Reranker 2 / 聊天 3（含决策最多2次），模型服务 HTTP 最多11次。不保证用满，不是多轮聊天，可能产生额外费用。";
+  }
 }
 function showDestinations() {
   if (!state.plan) return;
@@ -129,6 +155,8 @@ function showDestinations() {
   el("reranker-destination").textContent = "重排：" + state.plan.reranker.model + " → " + state.plan.reranker.url;
   const insecure = selected.base_url.startsWith("http://") ? "该回答地址使用 HTTP 明文传输：问题与证据可能被网络中的其他参与方读取。" : "";
   el("transport-notice").textContent = [selected.transport_notice, insecure].filter(Boolean).join(" ");
+  updateControls();
+  showAgentNotice();
 }
 async function loadPlan() {
   try {
@@ -143,17 +171,19 @@ async function loadPlan() {
     }
     el("model").value = plan.default_model;
     showDestinations();
-    el("status").textContent = "已准备好。每次提问：问题编码、重排、回答各1次，另有2次模型身份查询。";
+    el("status").textContent = "已准备好。默认单次检索；可勾选多步检索，提交前请核对对应预算。";
   } catch (error) {
     state.plan = null;
     showError(error instanceof Error ? error.message : "无法读取问答配置，请刷新页面。");
     el("status").textContent = "配置读取失败，未发起模型请求。";
   } finally { updateControls(); }
 }
-function validateAnswer(data, query, model) {
+function validateAnswer(data, query, model, agentMode = false) {
   requireValue(isObject(data) && data.schema_version === "rag-live/v1" && data.query === query && data.model === model);
-  requireValue(strings(data.steps) && data.steps.join(",") === "retrieve,rerank,answer" && Number.isFinite(data.elapsed_seconds) && data.elapsed_seconds >= 0);
+  requireValue(strings(data.steps) && Number.isFinite(data.elapsed_seconds) && data.elapsed_seconds >= 0);
+  if (!agentMode) requireValue(data.steps.join(",") === "retrieve,rerank,answer" && data.mode !== "agent");
   requireValue(isObject(data.request_counts) && ["embedding", "http", "reranker", "chat"].every(key => Number.isInteger(data.request_counts[key]) && data.request_counts[key] >= 0));
+  if (agentMode) validateAgentRun(data);
   requireValue(isObject(data.answer) && ["answered", "partial", "insufficient_evidence"].includes(data.answer.status) && Array.isArray(data.answer.claims) && strings(data.answer.missing_info) && isObject(data.sources));
   for (const [id, source] of Object.entries(data.sources)) {
     requireValue(/^S\d+$/.test(id) && isObject(source) && typeof source.chunk_id === "string" && typeof source.text === "string" && isObject(source.quotes) && Object.entries(source.quotes).every(([key, value]) => /^Q\d+$/.test(key) && typeof value === "string" && value.trim().length > 0 && source.text.includes(value)) && isObject(source.metadata));
@@ -172,6 +202,18 @@ function validateAnswer(data, query, model) {
     if (data.answer.status === "partial") requireValue(data.answer.missing_info.length > 0);
   }
   return data;
+}
+function validateAgentRun(data) {
+  requireValue(data.mode === "agent" && isObject(data.agent) && data.agent.max_tool_calls === 2 && Array.isArray(data.agent.tool_calls) && data.agent.tool_calls.length <= 2);
+  const calls = data.agent.tool_calls;
+  requireValue(calls.every(call => isObject(call) && typeof call.id === "string" && call.id.trim() && call.name === "search_knowledge" && typeof call.query === "string" && call.query.trim() && call.query.length <= 2000 && strings(call.evidence_ids) && new Set(call.evidence_ids).size === call.evidence_ids.length));
+  requireValue(new Set(calls.map(call => call.id)).size === calls.length && calls.every(call => call.evidence_ids.every(id => id.trim())));
+  const expected = calls.length === 0 ? "plan,answer" : calls.length === 1 ? "plan,search,plan,answer" : "plan,search,plan,search,answer";
+  requireValue(data.steps.join(",") === expected && data.agent.planner_calls === (calls.length === 0 ? 1 : 2));
+  requireValue(data.agent.stop_reason === (calls.length === 2 ? "tool_budget_reached" : "model_finished"));
+  requireValue(["embedding", "reranker", "chat", "http"].every(key => data.request_counts[key] <= { embedding: 2, reranker: 2, chat: 3, http: 11 }[key]));
+  requireValue(data.request_counts.embedding <= calls.length && data.request_counts.reranker <= calls.length && data.request_counts.chat >= data.agent.planner_calls);
+  if (calls.length === 0) requireValue(isObject(data.answer) && data.answer.status === "insufficient_evidence" && data.request_counts.embedding === 0 && data.request_counts.reranker === 0 && data.request_counts.chat === 1);
 }
 function safeSourceUrl(value) {
   if (typeof value !== "string") return false;
@@ -228,7 +270,13 @@ function renderAnswer(data) {
   for (const item of data.answer.missing_info) el("missing-list").append(text("li", item));
   el("missing").hidden = data.answer.missing_info.length === 0;
   const counts = data.request_counts;
-  el("run-summary").textContent = "检索 → 重排 → 回答已完成 · " + data.elapsed_seconds.toFixed(2) + " 秒 · Embedding " + counts.embedding + " / Reranker " + counts.reranker + " / 聊天 " + counts.chat + "（模型服务 HTTP " + counts.http + "）";
+  const completion = data.mode === "agent" ? "多步检索流程已结束" : "检索 → 重排 → 回答已完成";
+  el("run-summary").textContent = completion + " · " + data.elapsed_seconds.toFixed(2) + " 秒 · Embedding " + counts.embedding + " / Reranker " + counts.reranker + " / 聊天 " + counts.chat + "（模型服务 HTTP " + counts.http + "）";
+  if (data.mode === "agent") {
+    el("run-summary").textContent += " · 工具检索 " + data.agent.tool_calls.length + "/2，决策 " + data.agent.planner_calls + "次";
+    for (const call of data.agent.tool_calls) el("agent-query-list").append(text("li", call.query));
+    el("agent-searches").hidden = data.agent.tool_calls.length === 0;
+  }
   showSources(data.sources);
   el("result").hidden = false;
 }
@@ -237,18 +285,20 @@ async function submitQuestion(event) {
   if (state.busy || !state.plan) return;
   const query = el("query").value.trim();
   const model = el("model").value;
+  const agentMode = el("agent-mode").checked === true;
   if (!query) { showError("请先输入问题。"); el("query").focus(); return; }
   if (query.length > 2000 || !state.plan.models.some(item => item.id === model)) { showError("请检查问题长度与模型选择。"); return; }
+  if (agentMode && !agentSupported()) { showError("当前模型不支持多步检索，请取消选项或切换模型。"); return; }
   state.busy = true;
   clearResult();
   el("error").hidden = true;
-  el("status").textContent = "正在自动完成检索、重排和回答，请稍候……";
+  el("status").textContent = agentMode ? "正在按需执行最多2次工具检索并回答，请稍候……" : "正在自动完成检索、重排和回答，请稍候……";
   updateControls();
   try {
     const response = await fetch("/api/qa", {
       method: "POST", mode: "same-origin", credentials: "same-origin", cache: "no-store",
       headers: { "Content-Type": "application/json", "X-Retrieval-Lab": "1" },
-      body: JSON.stringify({ query, model, confirmed: true })
+      body: JSON.stringify({ query, model, confirmed: true, ...(agentMode ? { mode: "agent" } : {}) })
     });
     if (!response.ok) {
       let message = "本次问答未完成（HTTP " + response.status + "）。";
@@ -257,7 +307,7 @@ async function submitQuestion(event) {
       }
       throw new Error(message);
     }
-    renderAnswer(validateAnswer(await response.json(), query, model));
+    renderAnswer(validateAnswer(await response.json(), query, model, agentMode));
     el("status").textContent = "本次执行结束；回答仍需结合实际集群核验。";
   } catch (error) {
     showError((error instanceof Error ? error.message : "本次问答未完成。") + " 未展示未完成的回答；模型请求可能已发生并产生费用，不自动重试。");
@@ -266,6 +316,7 @@ async function submitQuestion(event) {
 }
 el("question-form").addEventListener("submit", submitQuestion);
 el("model").addEventListener("change", showDestinations);
+el("agent-mode").addEventListener("change", showAgentNotice);
 loadPlan();
 </script>
 </body>
