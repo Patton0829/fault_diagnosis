@@ -98,6 +98,8 @@ def describe() -> dict:
         "reranker": {key: reranking.describe()[key] for key in ("model", "url")},
         "pipeline": list(PIPELINE), "notice": NOTICE, "agent": describe_agent(),
         "conversation": describe_conversation(),
+        "storage": {"backend": "memory", "persistent": False,
+                    "notice": "当前使用内存短期会话；重启丢失，未启用MySQL，浏览器不保存会话ID。"},
         "stream": describe_stream(),
     }
 

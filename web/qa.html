@@ -68,6 +68,7 @@
     <label class="agent-choice"><input id="agent-mode" type="checkbox" disabled>多步检索（最多2次）</label>
     <p id="agent-notice" class="note">正在读取多步检索配置。</p>
     <p id="conversation-notice" class="note" hidden></p>
+    <p id="storage-notice" class="note" hidden></p>
     <div class="destination note">
       <p id="generation-destination">正在读取模型配置；打开页面不会调用模型。</p>
       <p id="reranker-destination"></p>
@@ -92,11 +93,12 @@
     <details><summary>查看来源</summary><div id="sources"></div></details>
   </section>
 
-  <footer class="note">资料来自固定文档快照，尚未逐条审核，适用版本可能未知。回答与引用检查不等于现场诊断或正确性保证，请核对实际集群信息。对话仅短期保存在服务内存；刷新页面不恢复，不作长期记忆。</footer>
+  <footer class="note">资料来自固定文档快照，尚未逐条审核，适用版本可能未知。回答与引用检查不等于现场诊断或正确性保证，请核对实际集群信息。<span id="storage-footer">对话仅短期保存在服务内存；刷新页面不恢复，不作长期记忆。</span></footer>
 </main>
 <script>
 "use strict";
-const state = { plan: null, busy: false, conversationId: null, turn: 0, history: [], currentTurn: null, sessionLost: false };
+const state = { plan: null, busy: false, conversationId: null, turn: 0, history: [], currentTurn: null, sessionLost: false, storageWarning: "" };
+const STORAGE_KEY = "qa.conversation.mysql";
 const el = id => document.getElementById(id);
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const strings = value => Array.isArray(value) && value.every(item => typeof item === "string");
@@ -144,7 +146,8 @@ function validatePlan(data) {
     requireValue(data.agent.max_tool_calls === 2 && typeof data.agent.notice === "string" && isObject(data.agent.max_request_counts));
     requireValue(["embedding", "reranker", "chat", "http"].every(key => data.agent.max_request_counts[key] === { embedding: 2, reranker: 2, chat: 3, http: 11 }[key]));
   }
-  if (data.conversation !== undefined) requireValue(isObject(data.conversation) && data.conversation.max_history_turns === 3 && data.conversation.max_sessions === 16 && data.conversation.extra_chat_requests === 1 && typeof data.conversation.notice === "string");
+  if (data.storage !== undefined) requireValue(isObject(data.storage) && ["memory", "mysql"].includes(data.storage.backend) && typeof data.storage.persistent === "boolean" && data.storage.persistent === (data.storage.backend === "mysql") && typeof data.storage.notice === "string");
+  if (data.conversation !== undefined) requireValue(isObject(data.conversation) && data.conversation.max_history_turns === 3 && data.conversation.max_sessions === (data.storage?.persistent ? null : 16) && data.conversation.extra_chat_requests === 1 && typeof data.conversation.notice === "string");
   if (data.stream !== undefined) requireValue(isObject(data.stream) && data.stream.url === "/api/qa/stream" && data.stream.protocol === "qa-progress/v1" && data.stream.heartbeat_seconds === 10);
   return data;
 }
@@ -164,7 +167,65 @@ function showAgentNotice() {
 function showConversationNotice() {
   const supported = !!state.plan?.conversation;
   el("conversation-notice").hidden = !supported;
-  el("conversation-notice").textContent = supported ? "支持短期追问：后续会将最多3轮先前问答摘要发给当前所选模型服务，改写成独立问题；每轮追问额外1次聊天和HTTP，可能产生费用。历史只帮助理解指代，不当作事实证据，回答仍重新检索；切换模型后历史也会发送给新服务。新对话可清除，刷新不恢复。" : "";
+  el("conversation-notice").textContent = supported ? "支持短期追问：后续会将最多3轮先前问答摘要发给当前所选模型服务，改写成独立问题；每轮追问额外1次聊天和HTTP，可能产生费用。历史只帮助理解指代，不当作事实证据，回答仍重新检索；切换模型后历史也会发送给新服务。" + (persistentStorage() ? "新对话只结束当前上下文，历史记录保留，不删除已保存问答。" : "新对话可清除，刷新不恢复。") : "";
+  showStorageNotice();
+}
+function persistentStorage() { return state.plan?.storage?.backend === "mysql" && state.plan.storage.persistent === true; }
+function showStorageNotice() {
+  el("storage-notice").hidden = !state.plan?.storage && !state.storageWarning;
+  el("storage-notice").textContent = (persistentStorage() ? "问答保存在本机 MySQL；同一标签刷新可恢复最近会话，浏览器仅保存会话ID，不保存正文或密钥。" : "使用服务内存会话，不自动迁移到数据库。") + (state.storageWarning ? " " + state.storageWarning : "");
+  el("storage-footer").textContent = persistentStorage() ? "问答保存到本机数据库；同一标签刷新可恢复。追问仍只使用最近3轮摘要理解上下文，不把历史当作证据。" : "对话仅短期保存在服务内存；刷新页面不恢复，不作长期记忆。";
+}
+function saveConversationId(clear = false) {
+  if (!persistentStorage()) return;
+  try {
+    if (clear) sessionStorage.removeItem(STORAGE_KEY);
+    else sessionStorage.setItem(STORAGE_KEY, state.conversationId);
+    state.storageWarning = ""; showStorageNotice();
+  } catch (_) {
+    state.storageWarning = clear ? "浏览器标记未清除，下次刷新可能提示会话失效；已保存问答未删除。" : "浏览器会话存储不可用，当前回答不受影响，但刷新后可能无法恢复。";
+    showStorageNotice();
+  }
+}
+async function restoreConversation() {
+  if (!persistentStorage()) return;
+  let id;
+  try {
+    id = sessionStorage.getItem(STORAGE_KEY);
+    if (id !== null && !/^[0-9a-f]{32}$/.test(id)) {
+      sessionStorage.removeItem(STORAGE_KEY); state.storageWarning = "已忽略无效的浏览器会话标记。"; showStorageNotice(); return;
+    }
+  } catch (_) {
+    state.storageWarning = "浏览器会话存储不可用，无法自动恢复；未请求模型。"; showStorageNotice(); return;
+  }
+  if (!id) return;
+  state.conversationId = id; state.sessionLost = true;
+  el("status").textContent = "正在恢复已保存对话，不调用模型……";
+  try {
+    const response = await fetch("/api/qa/conversation/load", { method: "POST", mode: "same-origin", credentials: "same-origin", cache: "no-store",
+      headers: { "Content-Type": "application/json", "X-Retrieval-Lab": "1" }, body: JSON.stringify({ conversation_id: id }) });
+    if (response.status === 410) {
+      saveConversationId(true); state.conversationId = null; state.sessionLost = false;
+      el("status").textContent = "保存的会话已失效，已清除本页标记；可开始新对话，未请求模型。"; return;
+    }
+    if (!response.ok) throw new Error("无法恢复对话");
+    const data = await response.json();
+    requireValue(isObject(data) && data.schema_version === "qa-conversation/v1" && data.id === id && Number.isSafeInteger(data.turn) && data.turn > 0 && Array.isArray(data.turns) && data.turns.length === Math.min(data.turn, 3));
+    for (const [index, turn] of data.turns.entries()) {
+      const number = data.turn - data.turns.length + index + 1;
+      requireValue(isObject(turn) && isObject(turn.conversation) && turn.conversation.id === id && typeof turn.query === "string" && turn.query.trim() && turn.query.length <= 2000 && state.plan.models.some(model => model.id === turn.model) && [undefined, "single", "agent"].includes(turn.mode));
+      if (turn.mode === "agent") requireValue(state.plan.agent?.enabled_models.includes(turn.model));
+      validateAnswer(turn, turn.query, turn.model, turn.mode === "agent", { id: number === 1 ? null : id, turn: number - 1 });
+    }
+    state.conversationId = null; state.turn = 0; state.history = []; state.currentTurn = null;
+    for (const turn of data.turns) saveTurn(turn, false);
+    clearResult(); renderAnswer(data.turns.at(-1)); state.sessionLost = false;
+    el("status").textContent = "已恢复最近已校验问答，未重新检索或调用模型；最后一轮模型：" + data.turns.at(-1).model + "。可继续追问。";
+  } catch (_) {
+    el("error").textContent = "无法恢复已保存对话，未请求模型，也未静默开启新会话。请检查数据库后刷新重试，或点击“新对话”。";
+    el("error").hidden = false;
+    el("status").textContent = "会话恢复未完成，原会话ID保留，不自动重试。";
+  }
 }
 function showDestinations() {
   if (!state.plan) return;
@@ -179,6 +240,7 @@ function showDestinations() {
   showConversationNotice();
 }
 async function loadPlan() {
+  state.busy = true;
   try {
     const response = await fetch("/api/qa/plan", { method: "GET", mode: "same-origin", credentials: "same-origin", cache: "no-store" });
     if (!response.ok) throw new Error("无法读取问答配置，请检查服务后刷新页面。");
@@ -192,11 +254,12 @@ async function loadPlan() {
     el("model").value = plan.default_model;
     showDestinations();
     el("status").textContent = "已准备好。默认单次检索；可勾选多步检索，提交前请核对对应预算。";
+    await restoreConversation();
   } catch (error) {
     state.plan = null;
     showError(error instanceof Error ? error.message : "无法读取问答配置，请刷新页面。");
     el("status").textContent = "配置读取失败，未发起模型请求。";
-  } finally { updateControls(); }
+  } finally { state.busy = false; updateControls(); }
 }
 function validateAnswer(data, query, model, agentMode = false, conversation = null) {
   requireValue(isObject(data) && data.schema_version === "rag-live/v1" && data.query === query && data.model === model);
@@ -316,7 +379,7 @@ function renderAnswer(data) {
   showSources(data.sources);
   el("result").hidden = false;
 }
-function saveTurn(data) {
+function saveTurn(data, persist = true) {
   if (!data.conversation) return;
   if (state.currentTurn) state.history = [...state.history, state.currentTurn].slice(-3);
   state.currentTurn = { query: data.query, summary: data.answer.claims.map(claim => claim.text).join("；") || "现有知识库证据不足，无法据此回答。" };
@@ -330,6 +393,7 @@ function saveTurn(data) {
   }
   el("conversation-history").hidden = state.history.length === 0;
   showAgentNotice();
+  if (persist) saveConversationId();
 }
 async function newConversation() {
   if (state.busy || !state.plan?.conversation) return;
@@ -341,6 +405,7 @@ async function newConversation() {
       if (!response.ok) throw new Error("无法清除服务端对话，请稍后再试；未自动重试。");
     }
     state.conversationId = null; state.turn = 0; state.history = []; state.currentTurn = null; state.sessionLost = false;
+    saveConversationId(true);
     el("history-list").replaceChildren(); el("conversation-history").hidden = true;
     clearResult(); el("error").hidden = true; el("status").textContent = "已开始新对话，尚未发送问题。";
     showAgentNotice();

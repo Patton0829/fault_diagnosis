@@ -58,6 +58,14 @@ function conversationResult(turn = 1, data = result()) {
 function streamPlan(base = plan()) {
   return { ...base, stream: { url: "/api/qa/stream", protocol: "qa-progress/v1", heartbeat_seconds: 10 } };
 }
+const STORAGE_KEY = "qa.conversation.mysql";
+function mysqlPlan() {
+  return { ...conversationPlan(), conversation: { ...conversationPlan().conversation, max_sessions: null }, storage: { backend: "mysql", persistent: true, notice: "本机数据库保存已完成问答。" } };
+}
+function savedConversation(turn = 3) {
+  return { schema_version: "qa-conversation/v1", id: CONVERSATION_ID, turn,
+    turns: Array.from({ length: Math.min(turn, 3) }, (_, index) => conversationResult(turn - Math.min(turn, 3) + index + 1)) };
+}
 const frame = (event, data, newline = "\n") => "event: " + event + newline + JSON.stringify(data, null, 2).split("\n").map(line => "data: " + line).join(newline) + newline + newline;
 const progress = (stage, status = "started", newline = "\n") => frame("progress", { schema_version: "qa-progress/v1", stage, status }, newline);
 function syntheticStream(chunks, { open = false, failure = null } = {}) {
@@ -94,16 +102,28 @@ class Element {
   }
 }
 function harness({ initial = plan(), response = result(), getFailure = false,
-  postFailure = null, deferred = false, responseStatuses = [], resetFailure = false, streams = [] } = {}) {
+  postFailure = null, deferred = false, responseStatuses = [], resetFailure = false, streams = [], storedId,
+  storageFailure = null, loadResponse = savedConversation(), loadStatus = 200, loadDeferred = false } = {}) {
   const elements = new Map([...page.matchAll(/<([a-z][\w-]*)\b([^>]*\bid="([^"]+)"[^>]*)>/gi)].map(match => {
     const element = new Element(match[1]); element.hidden = /\bhidden\b/.test(match[2]);
     element.disabled = /\bdisabled\b/.test(match[2]); return [match[3], element];
   }));
-  const calls = [], pending = []; let postIndex = 0;
+  const calls = [], pending = [], storageCalls = [], storageValues = new Map(storedId === undefined ? [] : [[STORAGE_KEY, storedId]]); let postIndex = 0;
+  const browserStorage = Object.fromEntries(["getItem", "setItem", "removeItem"].map(method => [method, (key, value) => {
+    storageCalls.push({ method, key, value });
+    if (storageFailure === method || storageFailure === "all") throw new Error("synthetic browser storage restriction");
+    if (method === "getItem") return storageValues.has(key) ? storageValues.get(key) : null;
+    if (method === "setItem") storageValues.set(key, value);
+    else storageValues.delete(key);
+  }]));
   const fetch = async (url, options) => {
     calls.push({ url, options });
     if (url === "/api/qa/plan") return { ok: !getFailure, status: getFailure ? 503 : 200, json: async () => clone(initial) };
     if (url === "/api/qa/conversation/reset") return { ok: !resetFailure, status: resetFailure ? 409 : 200, json: async () => ({ cleared: true }) };
+    if (url === "/api/qa/conversation/load") {
+      if (loadDeferred) await new Promise(resolve => pending.push(resolve));
+      return { ok: loadStatus === 200, status: loadStatus, json: async () => clone(loadResponse) };
+    }
     assert.equal(url, initial.stream ? "/api/qa/stream" : "/api/qa");
     const currentIndex = postIndex++;
     if (deferred) await new Promise(resolve => pending.push(resolve));
@@ -113,9 +133,9 @@ function harness({ initial = plan(), response = result(), getFailure = false,
       json: async () => { if (postFailure === "json") throw new Error("synthetic invalid JSON");
         return clone(postFailure === "http" ? { detail: "本次生成失败，未得到校验通过的回答。" } : Array.isArray(response) ? response[currentIndex] : response); } };
   };
-  const context = vm.createContext({ document: { getElementById: id => elements.get(id), createElement: tag => new Element(tag) }, fetch, URL, TextDecoder });
+  const context = vm.createContext({ document: { getElementById: id => elements.get(id), createElement: tag => new Element(tag) }, fetch, URL, TextDecoder, sessionStorage: browserStorage });
   vm.runInContext(script, context);
-  return { calls, get: id => elements.get(id), eval: code => vm.runInContext(code, context),
+  return { calls, storageCalls, storageValues, get: id => elements.get(id), eval: code => vm.runInContext(code, context),
     reset: () => elements.get("new-conversation").listeners.click(), finish: () => pending.shift()(), submit: () => {
       let prevented = false;
       const promise = elements.get("question-form").listeners.submit({ preventDefault() { prevented = true; } });
@@ -389,7 +409,7 @@ test("recent history is bounded, literal text and absent from a freshly opened p
   for (let i = 0; i < 5; i++) await h.submit();
   assert.equal(h.get("history-list").children.length, 3); assert.equal(h.eval("state.turn"), 5);
   assert(h.get("history-list").textContent.includes("<script>throw 1</script>")); assert.equal(h.get("history-list").querySelectorAll("script").length, 0);
-  assert(!page.includes("localStorage")); assert(!page.includes("sessionStorage"));
+  assert(!page.includes("localStorage")); assert.equal(h.storageCalls.length, 0);
   const refreshed = await ready({ initial: conversationPlan() }); assert.equal(refreshed.eval("state.conversationId"), null);
   assert.equal(refreshed.get("history-list").textContent, ""); assert.equal(refreshed.calls.length, 1);
 });
@@ -477,4 +497,93 @@ test("stream guard failures stay JSON HTTP errors and never open a stream or ret
   const h = await ready({ initial: streamPlan(conversationPlan()), responseStatuses: [410] });
   await h.submit(); assert.equal(h.calls.length, 2); assert.equal(h.get("result").hidden, true);
   assert(h.get("error").textContent.includes("新对话")); assert.equal(h.get("ask").disabled, true);
+});
+
+test("memory storage never touches browser storage, even when it is unavailable", async () => {
+  const memory = { ...conversationPlan(), storage: { backend: "memory", persistent: false, notice: "仅服务内存。" } };
+  for (const initial of [conversationPlan(), memory]) {
+    const h = await ready({ initial, storedId: CONVERSATION_ID, storageFailure: "all", response: conversationResult(1) });
+    await h.submit(); await h.reset(); assert.equal(h.storageCalls.length, 0);
+    assert(!h.calls.some(call => call.url.endsWith("/load"))); assert.equal(h.get("error").hidden, true);
+  }
+});
+
+test("mysql mode stores only the successful ID and reset retains database-history disclosure", async () => {
+  const h = await ready({ initial: mysqlPlan(), response: conversationResult(1) });
+  assert.equal(h.calls.length, 1); assert(h.get("storage-notice").textContent.includes("本机 MySQL"));
+  await h.submit(); assert.equal(h.get("result").hidden, false);
+  assert.equal(h.storageValues.get(STORAGE_KEY), CONVERSATION_ID);
+  const writes = h.storageCalls.filter(call => call.method === "setItem");
+  assert.deepEqual(writes, [{ method: "setItem", key: STORAGE_KEY, value: CONVERSATION_ID }]);
+  assert(h.get("conversation-notice").textContent.includes("不删除已保存问答"));
+  await h.reset(); assert.equal(h.storageValues.has(STORAGE_KEY), false); assert.equal(h.calls.length, 3);
+});
+
+test("mysql refresh restores a fully validated tail without model requests or changing the selected model", async () => {
+  const loaded = savedConversation(5); loaded.turns[2].model = "glm-4.7";
+  const h = await ready({ initial: mysqlPlan(), storedId: CONVERSATION_ID, loadResponse: loaded, response: conversationResult(6) });
+  assert.equal(h.calls.length, 2); const request = h.calls[1]; assert.equal(request.url, "/api/qa/conversation/load");
+  assert.equal(request.options.method, "POST"); assert.equal(request.options.mode, "same-origin");
+  assert.equal(request.options.headers["X-Retrieval-Lab"], "1"); assert.equal(request.options.credentials, "same-origin");
+  assert.deepEqual(JSON.parse(request.options.body), { conversation_id: CONVERSATION_ID });
+  assert.equal(h.eval("state.turn"), 5); assert.equal(h.eval("state.conversationId"), CONVERSATION_ID);
+  assert.equal(h.get("model").value, MODEL); assert.equal(h.get("result").hidden, false); assert.equal(h.get("history-list").children.length, 2);
+  assert(h.get("status").textContent.includes("未重新检索或调用模型"));
+  await h.submit(); assert.equal(JSON.parse(h.calls[2].options.body).conversation_id, CONVERSATION_ID);
+  assert.equal(h.get("result").hidden, false); assert.equal(h.eval("state.turn"), 6);
+});
+
+test("restoring mysql history disables controls until all rows validate, with no partial answer", async () => {
+  const h = await ready({ initial: mysqlPlan(), storedId: CONVERSATION_ID, loadDeferred: true });
+  for (const id of ["query", "model", "ask", "new-conversation", "agent-mode"]) assert.equal(h.get(id).disabled, true);
+  await h.submit(); await h.reset(); assert.equal(h.calls.length, 2); assert.equal(h.get("result").hidden, true);
+  h.finish(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.get("result").hidden, false); assert.equal(h.get("ask").disabled, false);
+});
+
+test("malformed restored records fail closed and keep the ID until explicit reset", async () => {
+  const mutations = [data => { data.id = "b".repeat(32); }, data => { data.turn++; },
+    data => { data.turns[0].conversation.turn = 9; }, data => { data.turns[0].conversation.id = "b".repeat(32); },
+    data => { data.turns[1].model = "unlisted-model"; }, data => { data.turns[1].answer.claims[0].evidence[0].quote_id = "Q999"; },
+    data => { data.turns[1].conversation.effective_query = " "; }];
+  for (const mutate of mutations) {
+    const loaded = savedConversation(); mutate(loaded);
+    const h = await ready({ initial: mysqlPlan(), storedId: CONVERSATION_ID, loadResponse: loaded });
+    assert.equal(h.get("result").hidden, true); assert.equal(h.get("history-list").textContent, "");
+    assert.equal(h.get("ask").disabled, true); assert.equal(h.get("new-conversation").disabled, false);
+    assert.equal(h.storageValues.get(STORAGE_KEY), CONVERSATION_ID); assert.equal(h.calls.length, 2);
+    await h.submit(); assert.equal(h.calls.length, 2); await h.reset(); assert.equal(h.storageValues.has(STORAGE_KEY), false);
+  }
+});
+
+test("mysql 410 clears the old marker but 503 preserves it without silently starting a new session", async () => {
+  const expired = await ready({ initial: mysqlPlan(), storedId: CONVERSATION_ID, loadStatus: 410 });
+  assert.equal(expired.storageValues.has(STORAGE_KEY), false); assert.equal(expired.eval("state.conversationId"), null);
+  assert.equal(expired.get("ask").disabled, false); assert(expired.get("status").textContent.includes("已失效")); assert.equal(expired.calls.length, 2);
+  const unavailable = await ready({ initial: mysqlPlan(), storedId: CONVERSATION_ID, loadStatus: 503 });
+  assert.equal(unavailable.storageValues.get(STORAGE_KEY), CONVERSATION_ID); assert.equal(unavailable.get("ask").disabled, true);
+  assert(unavailable.get("error").textContent.includes("未静默开启新会话")); await unavailable.submit(); assert.equal(unavailable.calls.length, 2);
+});
+
+test("invalid stored IDs never reach the server and browser-storage failures never hide successful answers", async () => {
+  const malformed = await ready({ initial: mysqlPlan(), storedId: "<script>untrusted</script>" });
+  assert.equal(malformed.calls.length, 1); assert.equal(malformed.storageValues.has(STORAGE_KEY), false);
+  const unreadable = await ready({ initial: mysqlPlan(), storageFailure: "getItem" });
+  assert.equal(unreadable.calls.length, 1); assert(unreadable.get("storage-notice").textContent.includes("无法自动恢复"));
+  const unwritable = await ready({ initial: mysqlPlan(), response: conversationResult(1), storageFailure: "setItem" });
+  await unwritable.submit(); assert.equal(unwritable.get("result").hidden, false); assert.equal(unwritable.get("error").hidden, true);
+  assert(unwritable.get("storage-notice").textContent.includes("当前回答不受影响")); assert.equal(unwritable.calls.length, 2);
+});
+
+test("only an explicitly consistent persistent plan permits unbounded database-session metadata", async () => {
+  const cases = [
+    { ...conversationPlan(), conversation: { ...conversationPlan().conversation, max_sessions: null } },
+    { ...mysqlPlan(), storage: { backend: "mysql", persistent: false, notice: "invalid" } },
+    { ...mysqlPlan(), storage: { backend: "memory", persistent: true, notice: "invalid" } },
+    { ...mysqlPlan(), conversation: { ...conversationPlan().conversation, max_sessions: 16 } },
+  ];
+  for (const initial of cases) {
+    const h = await ready({ initial, storedId: CONVERSATION_ID });
+    assert.equal(h.get("ask").disabled, true); assert.equal(h.calls.length, 1); assert.equal(h.storageCalls.length, 0);
+  }
 });

@@ -15,7 +15,7 @@
 | ① 文档处理与检索 | 已有清洗、切块、Embedding、Milvus和混合检索；多格式解析、跨版本增量更新及正式评测仍待补 |
 | ② 单轮RAG | 已有真实检索、重排、结构化回答、来源引用、拒答及简单页面 |
 | ③ LangGraph辅助诊断 | 最小主流程已有真实单轮图、原生工具循环及最近3轮短期追问；更多诊断工具、澄清策略与持久记忆仍待补 |
-| ④ 平台工程、部署与评测 | 当前开始：已有FastAPI与SSE阶段进度；MySQL/SQLAlchemy、Redis、vLLM、Docker Compose及系统化质量评测尚未完成 |
+| ④ 平台工程、部署与评测 | 当前推进：已有FastAPI与SSE阶段进度；MySQL/SQLAlchemy代码与离线测试已完成，待本机初始化验收；Redis、vLLM、Docker Compose及系统化质量评测仍待补 |
 
 保持简单页面，逐步补齐核心能力；教学分支/审批回放不能当作真实Agent已经完成。当前使用Kubernetes文档复现技术路线，不把它表述为真实铁路故障知识或已部署的现场诊断系统。
 
@@ -32,7 +32,7 @@ fault_diagnosis/
 │       ├── ingestion/             # 文档处理、语料准备与输入规划
 │       │   └── _snapshots/        # 历史规则源码快照，只用于旧语料校验
 │       ├── retrieval/             # BM25、Dense、RRF和重排流水线
-│       ├── storage/               # 本地编码缓存、Milvus验证/建库/搜索
+│       ├── storage/               # 编码缓存、Milvus、MySQL配置和SQLAlchemy问答存储
 │       ├── rag/                   # 回答、引用校验、评测和Milvus对照
 │       ├── workflows/             # live_rag.py单轮；agent_rag.py工具循环；其余为合成教学
 │       ├── web_app.py             # 文档处理可视化的后端
@@ -44,7 +44,7 @@ fault_diagnosis/
 │   ├── learning/                 # 本机学习笔记，暂不上传
 │   ├── model_apis/               # 脱敏模板；原接口说明只保留在本机
 │   └── reference/                # 本机个人参考资料，不上传
-├── models/                       # 暂留原位的.env；不是模型权重目录
+├── models/                       # 模型.env及本机database.env；不是模型权重目录
 ├── knowledge/                    # 原始知识资料、上游快照及来源清单
 ├── data/                         # 生成语料和数据库，不提交Git
 ├── web/                          # 可视化前端HTML
@@ -132,7 +132,7 @@ python -m qa_platform.providers.local_embedding
 3. `web/qa.html`：读取配置、展示发送范围，主动提交一次请求，用纯文本展示答案、引用与来源。仅增加新对话按钮及折叠的短期历史，没有对照台、图编辑器或人工审批；`web/retrieval_lab.html`只新增入口链接。
 4. `tests/test_live_rag.py`验证真实LangGraph与既有业务函数的连接和API边界；`tests/qa.test.cjs`验证前端状态及安全展示，`tests/test_qa_ui.py`将其纳入pytest。测试使用合成数据和替身，不产生真实模型费用。
 
-这是单机、当前11篇资料的小规模应用；现有短期追问不等于持久会话或生产部署。节点运行成功和引用存在都不能证明事实正确、排查完整或版本适用。
+这是单机、当前11篇资料的小规模应用；默认短期会话仍在内存，MySQL模式须另行显式启用，不等于生产部署。节点运行成功和引用存在都不能证明事实正确、排查完整或版本适用。
 
 ### 最小验收记录（2026-10-20）
 
@@ -217,7 +217,7 @@ START → plan ──提出合法工具调用──→ search
 
 ### 最小多轮追问：短期会话，而非历史充当证据
 
-`/qa`现默认开启页面级短期会话：先问完整问题，再问“那它的配置怎么看？”；页面显示本轮回答，较早问答及补全后的独立检索问题默认折叠。“新对话”清除当前服务端会话与页面记录，不发送模型请求。刷新页面不恢复会话，服务重启丢失全部会话；这不是Redis、SQL持久化或LangGraph检查点。
+`/qa`现默认开启页面级短期会话：先问完整问题，再问“那它的配置怎么看？”；页面显示本轮回答，较早问答及补全后的独立检索问题默认折叠。默认`--storage memory`时，“新对话”清除当前服务端会话与页面记录，刷新不恢复，服务重启丢失；不发送模型请求。可选MySQL持久化见下一节，与LangGraph运行检查点是两回事。
 
 首次提问仍直接执行原图。追问先增加一次`contextualize`调用，把当前问题与服务端最近3轮摘要交给所选聊天服务，返回独立检索问题，然后重新运行原RAG或工具图。历史只解析指代，不能当作本轮事实证据；最终回答仍必须引用本轮检索原文。改写可能出错，展开“本轮独立检索问题”可核对；新话题应原样保留，不强行混入旧话题。
 
@@ -243,7 +243,48 @@ START → plan ──提出合法工具调用──→ search
 
 实现文件：`workflows/progress.py`用ContextVar隔离本次通知与取消；原图和知识工具在真实工作前后报告阶段；`web_stream.py`用一个同步工作线程和有界异步队列桥接到StreamingResponse；`retrieval_lab.py`让JSON与SSE共用执行逻辑及校验；`web/qa.html`解析进度但只渲染已校验终态。协议参考[MDN的SSE事件格式](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events)，响应实现参考[Starlette StreamingResponse](https://starlette.dev/responses/#streamingresponse)。
 
-2026-10-20，真实浏览器提问“Pod 与 Service 不在同一命名空间时，DNS 查询应该指定什么？请简短回答。”：答案到达前实际看到“混合检索中…”，最后收到`answered`及原文引用，20.50秒，Embedding1/重排1/聊天1/HTTP5。此问题和前轮不同，不能把耗时差归因于SSE；SSE也不保证模型生成更快。断线、心跳、失败、多步与追问进度使用离线测试验证，不冒充新增真实模型样例。全量765项测试通过、4项既有警告；Node前端32项通过。`tests/test_qa_stream.py`含原始ASGI测试，证明工作尚未结束时已交付进度，不能仅凭会缓冲的TestClient断言实时性。本机验收记录在`reports/sse-acceptance-2026-10-20.json`，不提交Git。
+2026-10-20，真实浏览器提问“Pod 与 Service 不在同一命名空间时，DNS 查询应该指定什么？请简短回答。”：答案到达前实际看到“混合检索中…”，最后收到`answered`及原文引用，20.50秒，Embedding1/重排1/聊天1/HTTP5。此问题和前轮不同，不能把耗时差归因于SSE；SSE也不保证模型生成更快。断线、心跳、失败、多步与追问进度使用离线测试验证，不冒充新增真实模型样例。当时全量765项测试通过、4项既有警告；Node前端32项通过。`tests/test_qa_stream.py`含原始ASGI测试，证明工作尚未结束时已交付进度，不能仅凭会缓冲的TestClient断言实时性。本机验收记录在`reports/sse-acceptance-2026-10-20.json`，不提交Git。
+
+### MySQL + SQLAlchemy：问答留存与刷新恢复
+
+用户已通过MySQL命令行验证`127.0.0.1:3306`、MySQL 9.7.0、`root@localhost`连接及查询成功。Navicat是独立客户端，打不开不阻塞本功能。**代码和离线测试已完成；本轮尚未输入root密码、创建真实库表或启用MySQL服务模式，不能据此声称真实MySQL持久化验收通过。**
+
+先查看零连接计划；默认不会读取密码、配置、连接数据库或写文件：
+
+```bash
+/Users/patton/miniconda3/envs/langchain/bin/python -B scripts/setup_mysql.py
+```
+
+然后在自己的交互终端运行初始化，按提示输入MySQL root密码。不要把密码发到聊天，不要在命令参数中写密码：
+
+```bash
+/Users/patton/miniconda3/envs/langchain/bin/python -B scripts/setup_mysql.py --bootstrap
+```
+
+初始化只针对**新**`fault_diagnosis`库和`fault_qa@127.0.0.1`账号：先检查重名，再独占创建权限`0600`的`models/database.env`保存随机专用密码，建两张表，最后授予项目库`SELECT/INSERT/UPDATE/DELETE`并以专用账号执行只读结构检查。root密码不保存；应用不使用root、无建表或全局权限。旧库、账号或配置已存在即停止，不覆盖、不删库、不重置账号。MySQL DDL不是跨这些操作的整体事务；中途失败会保留配置及可能创建的局部资源，需人工核查，不应反复初始化。[MySQL CREATE USER文档](https://dev.mysql.com/doc/refman/9.7/en/create-user.html)
+
+配置模板为`models/database.env.example`；真实`models/database.env`被Git忽略，和模型`models/.env`分开。SQLAlchemy使用`URL.create`处理密码特殊字符，关闭SQL日志并隐藏参数；每次会话操作独立Session/事务。参考[引擎与URL配置](https://docs.sqlalchemy.org/en/20/core/engines.html)及[Session事务](https://docs.sqlalchemy.org/en/20/orm/session_transaction.html)。依赖在`database`可选组；当前环境已有SQLAlchemy与PyMySQL，不自动升级。
+
+初始化成功后先做只读检查，再停止原8766服务（原终端`Ctrl+C`）并显式启用MySQL：
+
+```bash
+/Users/patton/miniconda3/envs/langchain/bin/python -B scripts/setup_mysql.py --check
+/Users/patton/miniconda3/envs/langchain/bin/python -B scripts/serve_retrieval_lab.py --port 8766 --storage mysql
+```
+
+仍打开`http://127.0.0.1:8766/qa`，没有新增管理大面板。成功问一题后刷新同一标签页，再追问即可验收；刷新恢复不检索、不请求模型。只有启用MySQL的页面在`sessionStorage`保存一个随机会话ID，不在浏览器持久存正文或密码。关闭标签页不保证保留ID；目前没有账号登录、历史会话列表或跨设备恢复。数据库不可用时启动/请求会明确失败，不静默回退内存，不重复调用模型。
+
+| 保存位置 | 保存内容及用途 |
+| --- | --- |
+| `qa_conversations` | 随机会话ID、创建时间、绝对轮次、是否仍可继续 |
+| `qa_turns` | 每轮原问题、独立检索问题、模型、已校验完整回答、真正引用的原文和公开来源、请求计数、步骤、耗时及摘要 |
+| 最近3轮摘要 | 追问时取出用于解析指代；不把历史原文自动发送给模型，事实仍来自新检索 |
+
+只在整轮生成及引用校验成功后，以一笔数据库事务更新轮次并保存问答；失败不追加。数据库保留全部已成功记录，不沿用内存模式的16会话淘汰。“新对话”把旧会话设为结束、清除页面及浏览器ID，**不删除数据库历史**。运行中的LangGraph节点状态、失败草稿、未引用候选、向量、本机来源路径和密钥不保存；这不是LangGraph检查点恢复，不承诺重启后继续一半的模型请求。数据保存在本机数据库也不等于加密、备份、权限隔离或合规留存方案；当前只供本机单用户学习。
+
+本阶段文件：`storage/mysql_setup.py`负责安全配置、初始化与只读检查；`storage/sql_conversations.py`负责两张ORM表和事务存取；`scripts/setup_mysql.py`只是入口；`retrieval_lab.py`注入存储并提供恢复API；`web/qa.html`在原页面恢复会话。离线测试用临时SQLite验证ORM存取/事务/重开连接，用Mock验证初始化安全边界，用Node验证刷新恢复；**SQLite只用于测试，应用不回退SQLite，也不能替代真实MySQL方言、权限和服务重启验收。**
+
+2026-10-21，全量810项测试通过，4项既有警告；其中数据库存储/API与初始化安全测试45项，Node前端40项。上述测试没有使用真实MySQL凭据或请求模型；真实初始化及浏览器刷新验收仍待用户本机操作。
 
 ### 查看本地编码计划
 
@@ -653,6 +694,7 @@ python -B scripts/serve_data_lab.py --self-test
 | `check_local_embedding.py` | `providers/local_embedding.py` | 本地Embedding小样本验证 |
 | `build_k8s_embeddings.py` | `storage/embedding_cache.py` | 本地文档编码、事务缓存与断点续跑 |
 | `build_k8s_milvus.py` | `storage/kubernetes_milvus.py` | 复用已完成缓存、独立Milvus索引及跨进程验收 |
+| `setup_mysql.py` | `storage/mysql_setup.py` | 显式初始化MySQL专用账号与问答表、只读检查；默认零连接计划 |
 | `check_k8s_search.py` | `storage/kubernetes_search.py` | 真实问题共享编码、NumPy/Milvus过滤检索及数值/计时对照 |
 | `check_k8s_context.py` | `retrieval/context_expansion.py` | 原始块与同源同章节邻块补全、区间去重及正文预算对照 |
 | `check_chunking.py` | `ingestion/railway.py` | 铁路资料加载、父记录和子块 |
@@ -722,6 +764,6 @@ v2 的清单记录了迁移前四份规则源码的完整 SHA256。直接更改�
 
 当前学习路线：模型调用 → 文档处理 → BM25／Dense → RRF → Reranker → 最小RAG → 开发回归 → Milvus对照 → Kubernetes语料与可视化 → 本地Embedding小样本 → 编码缓存续跑 → 缓存向量独立入库 → 真实问句检索对照 → 相邻块上下文补全实验 → 全池重排 → 带段落引用回答 → LangGraph教学与真实单轮编排 → 原生Tool Calling验证。
 
-当前Kubernetes子集已跑通单轮问答及上述基础验收，千问Flash的原生工具调用合成验证也已通过；这不是整个实习项目已经结束。下一步是只读知识检索工具与受控多步检索，然后补多轮上下文、异步/SSE、业务数据库与缓存、增量知识管理、部署和系统评测。评测样本随开发逐步积累；指标必须由真实标注与测量得出，不能用离线测试通过数量代替。合成学习页独立保留，不继续扩展为主流程，也不额外加入复杂审批功能。
+当前Kubernetes子集已跑通单轮问答、受控多步知识检索、短期追问及SSE阶段进度；MySQL/SQLAlchemy代码与离线测试已补齐，下一步由本机交互初始化完成真实持久化验收，再补缓存、增量知识管理、部署和系统评测。这不是整个实习项目已经结束。评测样本随开发逐步积累；指标必须由真实标注与测量得出，不能用离线测试通过数量代替。合成学习页独立保留，不继续扩展为主流程，也不额外加入复杂审批功能。
 
 学习过程中，每增加一份实现文件都说明其输入、输出、职责和调用关系；对比实验应固定控制条件，不将“能运行”“排序一致”或“自动检查通过”直接当作问答正确率。

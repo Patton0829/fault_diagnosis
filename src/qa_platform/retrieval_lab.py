@@ -79,13 +79,15 @@ class ConversationResetRequest(BaseModel):
     conversation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
-def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
+def create_app(index_dir: Path = DEFAULT_INDEX, *, conversation_store=None, storage_backend: str = "memory") -> FastAPI:
+    if storage_backend not in {"memory", "mysql"} or (storage_backend == "mysql" and conversation_store is None):
+        raise ValueError("MySQL模式须显式传入已检查的存储；不隐式初始化或回退内存。")
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
     busy = Lock()
     from qa_platform.workflows.conversation import ConversationStore
 
-    conversations = ConversationStore()  # 仅本进程短期记忆；不接受浏览器上传历史。
+    conversations = conversation_store if conversation_store is not None else ConversationStore()
     # 仅保留最近一轮的服务端冻结结果；浏览器不能上传任意正文或路径。
     snapshot = None
     approval_lesson = None  # 按需创建；只保留本app的一轮合成内存检查点。
@@ -127,7 +129,16 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
     def qa_plan():
         from qa_platform.workflows.live_rag import describe
 
-        return describe()  # 不读密钥/索引，不启动图或模型请求。
+        plan = describe()  # 不读密钥/索引，不启动图或模型请求。
+        if storage_backend == "mysql":
+            notice = ("MySQL保存成功问答、实际引用原文、公开来源信息、请求计数和摘要；"
+                      "每次追问仍只取最近3轮摘要补全指代，不把历史当证据。"
+                      "本浏览器标签页仅存会话ID，刷新可恢复最近3轮，恢复不请求模型。"
+                      "新对话结束旧上下文，但不删除数据库历史；关闭标签页不保证还能找回会话ID。"
+                      "数据库故障会报错，不静默回退内存；不是用户登录或生产权限隔离。")
+            plan["storage"] = {"backend": "mysql", "persistent": True, "notice": notice}
+            plan["conversation"] = {**plan["conversation"], "max_sessions": None, "notice": notice}
+        return plan
 
     @app.get("/assets/retrieval_export.js")
     def export_script():
@@ -222,7 +233,9 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
         try:
             return conversations.get(payload.conversation_id)
         except KeyError:
-            raise HTTPException(410, "会话已失效或服务已重启，请点击“新对话”；本次未请求模型。") from None
+            raise HTTPException(410, "会话已失效或已结束，请点击“新对话”；本次未请求模型。") from None
+        except Exception:
+            raise HTTPException(503, "无法读取会话数据库；未请求模型，未回退内存，请检查服务后重试。") from None
 
     def qa_work(payload: QARequest, history: list) -> dict:
         from qa_platform.workflows.conversation import contextualize
@@ -264,6 +277,12 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
 
         if isinstance(exc, (RAGRunError, AgentRunError, ContextError)):
             return str(exc)
+        if storage_backend == "mysql":
+            from qa_platform.storage.sql_conversations import DatabaseError
+
+            if isinstance(exc, DatabaseError):
+                return ("会话数据库操作未完成，本轮未确认保存、未展示回答；模型请求可能已经发生并产生费用。"
+                        "未回退内存、未自动重试，请先检查数据库。")
         print(f"[自动问答未完成] {type(exc).__name__}；不自动重试。", flush=True)
         return ("自动问答未完成，请检查索引、LangGraph依赖及模型服务。未展示未经校验的回答；"
                 "请求可能已经发生并产生费用，不自动重试。")
@@ -274,7 +293,8 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
         if not busy.acquire(blocking=False):
             raise HTTPException(409, "已有操作正在执行；本次提问尚未开始，请等待后主动提交。")
         try:
-            return await run_in_threadpool(qa_work, payload, read_history(payload))
+            history = await run_in_threadpool(read_history, payload)
+            return await run_in_threadpool(qa_work, payload, history)
         except HTTPException:
             raise
         except Exception as exc:
@@ -290,7 +310,7 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
         if not busy.acquire(blocking=False):
             raise HTTPException(409, "已有操作正在执行；本次提问尚未开始，请等待后主动提交。")
         try:
-            history = read_history(payload)  # 过期会话在发送200流头或任何模型请求前返回410。
+            history = await run_in_threadpool(read_history, payload)  # 先读历史，再发送200流头或请求模型。
         except Exception:
             busy.release()
             raise
@@ -307,10 +327,28 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
             raise HTTPException(409, "已有操作正在执行，未清空对话；请等待后再点击。")
         try:
             try:
-                conversations.clear(payload.conversation_id)
+                await run_in_threadpool(conversations.clear, payload.conversation_id)
             except KeyError:
                 pass  # 过期/重启后的“新对话”也可幂等清理浏览器状态。
             return {"cleared": True}
+        except Exception:
+            raise HTTPException(503, "会话未确认结束；请检查数据库，未删除记录、未回退内存或请求模型。") from None
+        finally:
+            busy.release()
+
+    @app.post("/api/qa/conversation/load")
+    async def load_conversation(request: Request):
+        payload = await read_payload(request, ConversationResetRequest, "只接受conversation_id，不接受历史正文或其他字段。")
+        if storage_backend != "mysql":
+            raise HTTPException(409, "当前为内存模式，不提供数据库恢复；未请求模型。")
+        if not busy.acquire(blocking=False):
+            raise HTTPException(409, "已有操作正在执行；尚未读取历史，请稍后刷新。")
+        try:
+            return await run_in_threadpool(conversations.load, payload.conversation_id)
+        except KeyError:
+            raise HTTPException(410, "会话不存在或已结束；未请求模型。") from None
+        except Exception:
+            raise HTTPException(503, "无法恢复数据库会话；未请求模型或回退内存，请检查后刷新。") from None
         finally:
             busy.release()
 
@@ -524,10 +562,28 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
 def main() -> int:
     parser = argparse.ArgumentParser(description="本地Kubernetes问答与检索学习台")
     parser.add_argument("--port", type=int, default=8766)
+    parser.add_argument("--storage", choices=("memory", "mysql"), default="memory",
+                        help="默认内存；mysql需先运行setup_mysql.py --bootstrap，不自动建库或回退")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port须为1024～65535")
     import uvicorn
+
+    engine = None
+    store = None
+    if args.storage == "mysql":
+        try:
+            from qa_platform.storage.mysql_setup import make_engine, read_config
+            from qa_platform.storage.sql_conversations import SQLConversationStore, check_schema
+
+            engine = make_engine(read_config())
+            check_schema(engine)
+            store = SQLConversationStore(engine)
+        except Exception:
+            if engine is not None:
+                engine.dispose()
+            print("[未启动] MySQL配置/依赖/服务/表结构未就绪；请运行setup_mysql.py --check。未回退内存或请求模型。")
+            return 1
 
     print(f"[打开] http://127.0.0.1:{args.port}/；仅本机，不发布。")
     print(f"[问答] http://127.0.0.1:{args.port}/qa；一次提问由LangGraph自动完成真实检索、重排和回答。")
@@ -539,7 +595,13 @@ def main() -> int:
     print("[引用] 可单独预览按行/按段对照；只在本机计算，新增模型请求为0，不改原文或向量。")
     print(f"[编排] http://127.0.0.1:{args.port}/workflow；独立教学合成快照，普通函数与LangGraph零模型回放。")
     print("[边界] 打开页面/普通检索不读.env、不请求云端；不重编码文档、不执行命令、不写报告，无自动重试。")
-    uvicorn.run(create_app(), host="127.0.0.1", port=args.port, access_log=False)
+    print(f"[会话存储] {args.storage}；MySQL模式保存成功问答与引用，默认内存模式重启丢失。")
+    try:
+        uvicorn.run(create_app(conversation_store=store, storage_backend=args.storage),
+                    host="127.0.0.1", port=args.port, access_log=False)
+    finally:
+        if engine is not None:
+            engine.dispose()
     return 0
 
 

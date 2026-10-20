@@ -43,3 +43,4 @@ __pycache__/
 !/docs/model_apis/README.md
 /models/*
 !/models/.env.example
+!/models/database.env.example
