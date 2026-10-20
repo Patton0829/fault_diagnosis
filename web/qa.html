@@ -27,6 +27,7 @@
     .agent-choice { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-weight: 500; }
     .agent-choice input { width: 17px; height: 17px; }
     button { padding: 11px 26px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; }
+    #new-conversation { background: white; color: var(--accent); white-space: nowrap; }
     button:disabled, textarea:disabled, select:disabled, input:disabled { opacity: .55; cursor: default; }
     button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid #55b7a9; outline-offset: 3px; }
     .destination { overflow-wrap: anywhere; margin: 13px 0 8px; }
@@ -62,9 +63,11 @@
     <div class="controls">
       <div class="model"><label for="model">回答模型</label><select id="model" disabled></select></div>
       <button id="ask" type="submit" disabled>提问</button>
+      <button id="new-conversation" type="button" disabled hidden>新对话</button>
     </div>
     <label class="agent-choice"><input id="agent-mode" type="checkbox" disabled>多步检索（最多2次）</label>
     <p id="agent-notice" class="note">正在读取多步检索配置。</p>
+    <p id="conversation-notice" class="note" hidden></p>
     <div class="destination note">
       <p id="generation-destination">正在读取模型配置；打开页面不会调用模型。</p>
       <p id="reranker-destination"></p>
@@ -75,9 +78,12 @@
     <p id="error" role="alert" hidden></p>
   </form>
 
+  <details id="conversation-history" hidden><summary>最近历史（不是本轮证据）</summary><ol id="history-list"></ol></details>
+
   <section id="result" hidden aria-labelledby="answer-title">
     <div class="answer-heading"><h2 id="answer-title">回答</h2><span id="answer-status" class="badge"></span></div>
     <p id="result-query" class="note"></p>
+    <details id="effective-query" hidden><summary>本次独立检索问题</summary><p id="effective-query-text" class="note"></p></details>
     <ol id="claims" class="claims"></ol>
     <p id="refusal" hidden>现有知识库证据不足，无法据此回答该问题。</p>
     <div id="missing" hidden><h2>还需补充或核实</h2><ul id="missing-list"></ul></div>
@@ -86,11 +92,11 @@
     <details><summary>查看来源</summary><div id="sources"></div></details>
   </section>
 
-  <footer class="note">资料来自固定文档快照，尚未逐条审核，适用版本可能未知。回答与引用检查不等于现场诊断或正确性保证，请核对实际集群信息。此页不保存对话历史。</footer>
+  <footer class="note">资料来自固定文档快照，尚未逐条审核，适用版本可能未知。回答与引用检查不等于现场诊断或正确性保证，请核对实际集群信息。对话仅短期保存在服务内存；刷新页面不恢复，不作长期记忆。</footer>
 </main>
 <script>
 "use strict";
-const state = { plan: null, busy: false };
+const state = { plan: null, busy: false, conversationId: null, turn: 0, history: [], currentTurn: null, sessionLost: false };
 const el = id => document.getElementById(id);
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const strings = value => Array.isArray(value) && value.every(item => typeof item === "string");
@@ -104,6 +110,9 @@ function text(tag, content, className) {
 function updateControls() {
   const disabled = state.busy || !state.plan;
   for (const id of ["query", "model", "ask"]) el(id).disabled = disabled;
+  el("ask").disabled = disabled || state.sessionLost;
+  el("new-conversation").hidden = !state.plan?.conversation;
+  el("new-conversation").disabled = disabled || !state.plan?.conversation;
   const supported = agentSupported();
   el("agent-mode").disabled = disabled || !supported;
   if (!supported) el("agent-mode").checked = false;
@@ -116,6 +125,8 @@ function clearResult() {
   el("missing").hidden = true;
   el("refusal").hidden = true;
   el("agent-searches").hidden = true;
+  el("effective-query").hidden = true;
+  el("effective-query-text").textContent = "";
 }
 function showError(message) {
   clearResult();
@@ -133,6 +144,7 @@ function validatePlan(data) {
     requireValue(data.agent.max_tool_calls === 2 && typeof data.agent.notice === "string" && isObject(data.agent.max_request_counts));
     requireValue(["embedding", "reranker", "chat", "http"].every(key => data.agent.max_request_counts[key] === { embedding: 2, reranker: 2, chat: 3, http: 11 }[key]));
   }
+  if (data.conversation !== undefined) requireValue(isObject(data.conversation) && data.conversation.max_history_turns === 3 && data.conversation.max_sessions === 16 && data.conversation.extra_chat_requests === 1 && typeof data.conversation.notice === "string");
   return data;
 }
 function agentSupported() {
@@ -144,8 +156,14 @@ function showAgentNotice() {
   } else if (!el("agent-mode").checked) {
     el("agent-notice").textContent = "可选：让模型决定检索什么、是否再查一次；不是多轮聊天。未选中时保持原流程。";
   } else {
-    el("agent-notice").textContent = "所选回答服务额外接收问题、工具定义、子查询及每次前5块正文和必要审核标记，决定是否继续检索；不发送本机路径或向量。最多2轮：Embedding 2 / Reranker 2 / 聊天 3（含决策最多2次），模型服务 HTTP 最多11次。不保证用满，不是多轮聊天，可能产生额外费用。";
+    const extra = state.conversationId ? 1 : 0;
+    el("agent-notice").textContent = "所选回答服务额外接收问题、工具定义、子查询及每次前5块正文和必要审核标记，决定是否继续检索；不发送本机路径或向量。最多2轮：Embedding 2 / Reranker 2 / 聊天 " + (3 + extra) + "（含决策最多2次" + (extra ? "和追问改写1次" : "") + "），模型服务 HTTP 最多" + (11 + extra) + "次。不保证用满，工具检索本身不是多轮聊天，可能产生额外费用。";
   }
+}
+function showConversationNotice() {
+  const supported = !!state.plan?.conversation;
+  el("conversation-notice").hidden = !supported;
+  el("conversation-notice").textContent = supported ? "支持短期追问：后续会将最多3轮先前问答摘要发给当前所选模型服务，改写成独立问题；每轮追问额外1次聊天和HTTP，可能产生费用。历史只帮助理解指代，不当作事实证据，回答仍重新检索；切换模型后历史也会发送给新服务。新对话可清除，刷新不恢复。" : "";
 }
 function showDestinations() {
   if (!state.plan) return;
@@ -157,6 +175,7 @@ function showDestinations() {
   el("transport-notice").textContent = [selected.transport_notice, insecure].filter(Boolean).join(" ");
   updateControls();
   showAgentNotice();
+  showConversationNotice();
 }
 async function loadPlan() {
   try {
@@ -178,12 +197,24 @@ async function loadPlan() {
     el("status").textContent = "配置读取失败，未发起模型请求。";
   } finally { updateControls(); }
 }
-function validateAnswer(data, query, model, agentMode = false) {
+function validateAnswer(data, query, model, agentMode = false, conversation = null) {
   requireValue(isObject(data) && data.schema_version === "rag-live/v1" && data.query === query && data.model === model);
   requireValue(strings(data.steps) && Number.isFinite(data.elapsed_seconds) && data.elapsed_seconds >= 0);
-  if (!agentMode) requireValue(data.steps.join(",") === "retrieve,rerank,answer" && data.mode !== "agent");
   requireValue(isObject(data.request_counts) && ["embedding", "http", "reranker", "chat"].every(key => Number.isInteger(data.request_counts[key]) && data.request_counts[key] >= 0));
-  if (agentMode) validateAgentRun(data);
+  let execution = data;
+  if (conversation) {
+    const info = data.conversation;
+    requireValue(isObject(info) && typeof info.id === "string" && /^[0-9a-f]{32}$/.test(info.id) && info.turn === conversation.turn + 1 && (!conversation.id || info.id === conversation.id));
+    requireValue(Number.isInteger(info.history_turns) && info.history_turns === Math.min(conversation.turn, 3));
+    requireValue(Number.isInteger(info.retained_turns) && info.retained_turns === Math.min(info.turn, 3) && typeof info.effective_query === "string" && info.effective_query.trim() && info.effective_query.length <= 2000 && typeof info.rewritten === "boolean");
+    if (!conversation.id) requireValue(info.history_turns === 0 && info.rewritten === false && info.effective_query === query);
+    else {
+      requireValue(data.steps[0] === "contextualize" && data.request_counts.chat >= 1 && data.request_counts.http >= 1 && info.history_turns > 0);
+      execution = { ...data, steps: data.steps.slice(1), request_counts: { ...data.request_counts, chat: data.request_counts.chat - 1, http: data.request_counts.http - 1 } };
+    }
+  } else requireValue(data.conversation === undefined);
+  if (!agentMode) requireValue(execution.steps.join(",") === "retrieve,rerank,answer" && data.mode !== "agent");
+  if (agentMode) validateAgentRun(execution);
   requireValue(isObject(data.answer) && ["answered", "partial", "insufficient_evidence"].includes(data.answer.status) && Array.isArray(data.answer.claims) && strings(data.answer.missing_info) && isObject(data.sources));
   for (const [id, source] of Object.entries(data.sources)) {
     requireValue(/^S\d+$/.test(id) && isObject(source) && typeof source.chunk_id === "string" && typeof source.text === "string" && isObject(source.quotes) && Object.entries(source.quotes).every(([key, value]) => /^Q\d+$/.test(key) && typeof value === "string" && value.trim().length > 0 && source.text.includes(value)) && isObject(source.metadata));
@@ -252,6 +283,10 @@ function showSources(sources) {
 function renderAnswer(data) {
   el("answer-status").textContent = { answered: "已回答", partial: "部分回答", insufficient_evidence: "证据不足" }[data.answer.status];
   el("result-query").textContent = data.query;
+  if (data.conversation) {
+    el("effective-query").hidden = false;
+    el("effective-query-text").textContent = data.conversation.effective_query + (data.conversation.rewritten ? "（已结合历史改写）" : "（未改写）");
+  }
   for (const claim of data.answer.claims) {
     const item = text("li", "");
     item.append(text("p", claim.text, "claim-text"));
@@ -280,12 +315,46 @@ function renderAnswer(data) {
   showSources(data.sources);
   el("result").hidden = false;
 }
+function saveTurn(data) {
+  if (!data.conversation) return;
+  if (state.currentTurn) state.history = [...state.history, state.currentTurn].slice(-3);
+  state.currentTurn = { query: data.query, summary: data.answer.claims.map(claim => claim.text).join("；") || "现有知识库证据不足，无法据此回答。" };
+  state.conversationId = data.conversation.id;
+  state.turn = data.conversation.turn;
+  el("history-list").replaceChildren();
+  for (const turn of state.history) {
+    const row = text("li", "");
+    row.append(text("p", "问：" + turn.query), text("p", "历史回答摘要：" + turn.summary.slice(0, 600), "note"));
+    el("history-list").append(row);
+  }
+  el("conversation-history").hidden = state.history.length === 0;
+  showAgentNotice();
+}
+async function newConversation() {
+  if (state.busy || !state.plan?.conversation) return;
+  state.busy = true; updateControls();
+  try {
+    if (state.conversationId) {
+      const response = await fetch("/api/qa/conversation/reset", { method: "POST", mode: "same-origin", credentials: "same-origin", cache: "no-store",
+        headers: { "Content-Type": "application/json", "X-Retrieval-Lab": "1" }, body: JSON.stringify({ conversation_id: state.conversationId }) });
+      if (!response.ok) throw new Error("无法清除服务端对话，请稍后再试；未自动重试。");
+    }
+    state.conversationId = null; state.turn = 0; state.history = []; state.currentTurn = null; state.sessionLost = false;
+    el("history-list").replaceChildren(); el("conversation-history").hidden = true;
+    clearResult(); el("error").hidden = true; el("status").textContent = "已开始新对话，尚未发送问题。";
+    showAgentNotice();
+  } catch (error) {
+    el("error").textContent = error instanceof Error ? error.message : "无法清除对话，未自动重试。";
+    el("error").hidden = false;
+  } finally { state.busy = false; updateControls(); }
+}
 async function submitQuestion(event) {
   event.preventDefault();
-  if (state.busy || !state.plan) return;
+  if (state.busy || !state.plan || state.sessionLost) return;
   const query = el("query").value.trim();
   const model = el("model").value;
   const agentMode = el("agent-mode").checked === true;
+  const conversation = state.plan.conversation ? { id: state.conversationId, turn: state.turn } : null;
   if (!query) { showError("请先输入问题。"); el("query").focus(); return; }
   if (query.length > 2000 || !state.plan.models.some(item => item.id === model)) { showError("请检查问题长度与模型选择。"); return; }
   if (agentMode && !agentSupported()) { showError("当前模型不支持多步检索，请取消选项或切换模型。"); return; }
@@ -298,25 +367,28 @@ async function submitQuestion(event) {
     const response = await fetch("/api/qa", {
       method: "POST", mode: "same-origin", credentials: "same-origin", cache: "no-store",
       headers: { "Content-Type": "application/json", "X-Retrieval-Lab": "1" },
-      body: JSON.stringify({ query, model, confirmed: true, ...(agentMode ? { mode: "agent" } : {}) })
+      body: JSON.stringify({ query, model, confirmed: true, ...(agentMode ? { mode: "agent" } : {}), ...(conversation ? { conversation: true, ...(conversation.id ? { conversation_id: conversation.id } : {}) } : {}) })
     });
     if (!response.ok) {
       let message = "本次问答未完成（HTTP " + response.status + "）。";
+      if (response.status === 410) { state.sessionLost = true; message = "对话已失效，请点击“新对话”后再提问。"; }
       if (response.status === 503) {
         try { const failure = await response.json(); if (isObject(failure) && typeof failure.detail === "string") message = failure.detail; } catch (_) { /* 不展示未知错误响应。 */ }
       }
       throw new Error(message);
     }
-    renderAnswer(validateAnswer(await response.json(), query, model, agentMode));
+    const answer = validateAnswer(await response.json(), query, model, agentMode, conversation);
+    renderAnswer(answer); saveTurn(answer);
     el("status").textContent = "本次执行结束；回答仍需结合实际集群核验。";
   } catch (error) {
     showError((error instanceof Error ? error.message : "本次问答未完成。") + " 未展示未完成的回答；模型请求可能已发生并产生费用，不自动重试。");
-    el("status").textContent = "执行未完成。再次点击提问将发起新请求。";
+    el("status").textContent = state.sessionLost ? "对话已失效，请点击“新对话”；不会自动重试。" : "执行未完成。再次点击提问将发起新请求。";
   } finally { state.busy = false; updateControls(); }
 }
 el("question-form").addEventListener("submit", submitQuestion);
 el("model").addEventListener("change", showDestinations);
 el("agent-mode").addEventListener("change", showAgentNotice);
+el("new-conversation").addEventListener("click", newConversation);
 loadPlan();
 </script>
 </body>

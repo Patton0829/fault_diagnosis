@@ -21,7 +21,8 @@ NOTICE = (
     "问题发送到自部署Embedding；问题与候选正文发送到云端重排，"
     "问题与前5块证据发送到所选回答服务；不发送本机路径或向量到云端。"
     "资料未审核、适用版本需核实；引用校验不是事实正确性证明，不执行文档命令。"
-    "不自动重试、不补上下文、不保存会话、不外发LangSmith追踪。每次主动提问都是新请求，可能收费。"
+    "不自动重试、不补相邻上下文、不外发LangSmith追踪。默认单次请求；可选短期会话理解追问，历史不是证据。"
+    "每次主动提问都是新请求，可能收费。"
 )
 
 
@@ -78,6 +79,7 @@ class RAGRunError(RuntimeError):
 def describe() -> dict:
     """打开页面只读固定配置，不加载密钥、索引或模型客户端。"""
     from qa_platform.workflows.agent_rag import describe as describe_agent
+    from qa_platform.workflows.conversation import describe as describe_conversation
 
     config = answering.describe()
     return {
@@ -85,6 +87,7 @@ def describe() -> dict:
         "default_model": config["default_model"], "models": config["models"],
         "reranker": {key: reranking.describe()[key] for key in ("model", "url")},
         "pipeline": list(PIPELINE), "notice": NOTICE, "agent": describe_agent(),
+        "conversation": describe_conversation(),
     }
 
 

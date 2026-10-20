@@ -45,6 +45,16 @@ function agentResult(count = 1) {
   if (!count) { data.answer = { status: "insufficient_evidence", claims: [], missing_info: ["没有工具证据，不能作答。"] }; data.sources = {}; }
   return data;
 }
+const CONVERSATION_ID = "a".repeat(32);
+function conversationPlan() {
+  return { ...agentPlan(), conversation: { max_history_turns: 3, max_sessions: 16, extra_chat_requests: 1, notice: "历史仅帮助改写，不是事实依据。" } };
+}
+function conversationResult(turn = 1, data = result()) {
+  const value = clone(data);
+  value.conversation = { id: CONVERSATION_ID, turn, history_turns: Math.min(turn - 1, 3), retained_turns: Math.min(turn, 3), effective_query: turn > 1 ? "完整独立的 DNS 检索问题" : value.query, rewritten: turn > 1 };
+  if (turn > 1) { value.steps.unshift("contextualize"); value.request_counts.chat++; value.request_counts.http++; }
+  return value;
+}
 
 class Element {
   constructor(tag = "div") {
@@ -64,26 +74,29 @@ class Element {
   }
 }
 function harness({ initial = plan(), response = result(), getFailure = false,
-  postFailure = null, deferred = false } = {}) {
+  postFailure = null, deferred = false, responseStatuses = [], resetFailure = false } = {}) {
   const elements = new Map([...page.matchAll(/<([a-z][\w-]*)\b([^>]*\bid="([^"]+)"[^>]*)>/gi)].map(match => {
     const element = new Element(match[1]); element.hidden = /\bhidden\b/.test(match[2]);
     element.disabled = /\bdisabled\b/.test(match[2]); return [match[3], element];
   }));
-  const calls = [], pending = [];
+  const calls = [], pending = []; let postIndex = 0;
   const fetch = async (url, options) => {
     calls.push({ url, options });
     if (url === "/api/qa/plan") return { ok: !getFailure, status: getFailure ? 503 : 200, json: async () => clone(initial) };
+    if (url === "/api/qa/conversation/reset") return { ok: !resetFailure, status: resetFailure ? 409 : 200, json: async () => ({ cleared: true }) };
     assert.equal(url, "/api/qa");
+    const currentIndex = postIndex++;
     if (deferred) await new Promise(resolve => pending.push(resolve));
     if (postFailure === "network") throw new Error("synthetic transport failure");
-    return { ok: postFailure !== "http", status: postFailure === "http" ? 503 : 200,
+    const status = postFailure === "http" ? 503 : responseStatuses[currentIndex] || 200;
+    return { ok: status >= 200 && status < 300, status,
       json: async () => { if (postFailure === "json") throw new Error("synthetic invalid JSON");
-        return clone(postFailure === "http" ? { detail: "本次生成失败，未得到校验通过的回答。" } : response); } };
+        return clone(postFailure === "http" ? { detail: "本次生成失败，未得到校验通过的回答。" } : Array.isArray(response) ? response[currentIndex] : response); } };
   };
   const context = vm.createContext({ document: { getElementById: id => elements.get(id), createElement: tag => new Element(tag) }, fetch, URL });
   vm.runInContext(script, context);
   return { calls, get: id => elements.get(id), eval: code => vm.runInContext(code, context),
-    finish: () => pending.shift()(), submit: () => {
+    reset: () => elements.get("new-conversation").listeners.click(), finish: () => pending.shift()(), submit: () => {
       let prevented = false;
       const promise = elements.get("question-form").listeners.submit({ preventDefault() { prevented = true; } });
       assert(prevented); return promise;
@@ -281,4 +294,82 @@ test("agent search query strings remain literal text", async () => {
   const h = await ready({ initial: agentPlan(), response }); h.get("agent-mode").checked = true; await h.submit();
   assert(h.get("agent-query-list").textContent.includes("<img src=x onerror=alert(1)>"));
   assert.equal(h.get("agent-query-list").querySelectorAll("img").length, 0);
+});
+
+test("conversation starts without a client ID and follow-ups send only the server ID, never history", async () => {
+  const h = await ready({ initial: conversationPlan(), response: [conversationResult(1), conversationResult(2)] });
+  assert.equal(h.calls.length, 1); assert.equal(h.get("new-conversation").hidden, false);
+  assert(h.get("conversation-notice").textContent.includes("最多3轮先前问答摘要"));
+  assert(h.get("conversation-notice").textContent.includes("切换模型后历史也会发送给新服务"));
+  await h.submit();
+  assert.deepEqual(JSON.parse(h.calls[1].options.body), { query: QUERY, model: MODEL, confirmed: true, conversation: true });
+  assert.equal(h.get("result").hidden, false); assert.equal(h.get("conversation-history").hidden, true);
+  await h.submit();
+  assert.deepEqual(JSON.parse(h.calls[2].options.body), { query: QUERY, model: MODEL, confirmed: true, conversation: true, conversation_id: CONVERSATION_ID });
+  assert.equal(h.get("result").hidden, false); assert.equal(h.get("history-list").children.length, 1);
+  assert(h.get("history-list").textContent.includes("历史回答摘要"));
+  assert(h.get("effective-query-text").textContent.includes("完整独立的 DNS 检索问题"));
+  assert.equal(h.get("effective-query").hidden, false); assert.equal(h.calls.length, 3);
+});
+
+test("conversation and multi-step combine with exactly one extra context request budget", async () => {
+  const h = await ready({ initial: conversationPlan(), response: [conversationResult(1, agentResult(2)), conversationResult(2, agentResult(2))] });
+  h.get("agent-mode").checked = true; await h.submit();
+  h.get("agent-mode").listeners.change(); assert(h.get("agent-notice").textContent.includes("HTTP 最多12次"));
+  await h.submit(); assert.equal(h.get("result").hidden, false); assert.equal(h.get("error").hidden, true);
+  assert(h.get("run-summary").textContent.includes("聊天 4")); assert(h.get("run-summary").textContent.includes("工具检索 2/2"));
+  assert.equal(JSON.parse(h.calls[2].options.body).mode, "agent");
+});
+
+test("new conversation uses a guarded idempotent reset before clearing local history without asking", async () => {
+  const h = await ready({ initial: conversationPlan(), response: [conversationResult(1), conversationResult(2), conversationResult(1)] });
+  await h.submit(); await h.submit(); await h.reset();
+  const reset = h.calls[3]; assert.equal(reset.url, "/api/qa/conversation/reset"); assert.equal(reset.options.method, "POST");
+  assert.equal(reset.options.mode, "same-origin"); assert.equal(reset.options.credentials, "same-origin");
+  assert.equal(reset.options.headers["X-Retrieval-Lab"], "1"); assert.equal(reset.options.headers["Content-Type"], "application/json");
+  assert.deepEqual(JSON.parse(reset.options.body), { conversation_id: CONVERSATION_ID });
+  assert.equal(h.eval("state.conversationId"), null); assert.equal(h.get("history-list").textContent, ""); assert.equal(h.get("result").hidden, true);
+  assert.equal(h.calls.length, 4); await h.submit(); assert.equal(JSON.parse(h.calls[4].options.body).conversation_id, undefined);
+});
+
+test("failed reset retains server ID and prior local history; busy requests disable reset", async () => {
+  const h = await ready({ initial: conversationPlan(), response: [conversationResult(1), conversationResult(2)], resetFailure: true });
+  await h.submit(); await h.submit(); const prior = h.get("history-list").textContent; await h.reset();
+  assert.equal(h.eval("state.conversationId"), CONVERSATION_ID); assert.equal(h.get("history-list").textContent, prior);
+  assert.equal(h.get("result").hidden, false); assert.equal(h.get("error").hidden, false);
+  const busy = await ready({ initial: conversationPlan(), response: conversationResult(1), deferred: true });
+  const pending = busy.submit(); assert.equal(busy.get("new-conversation").disabled, true); await busy.reset();
+  assert.equal(busy.calls.length, 2); busy.finish(); await pending;
+});
+
+test("expired conversation prompts explicit new conversation and never retries or appends failed history", async () => {
+  const h = await ready({ initial: conversationPlan(), response: [conversationResult(1), {}], responseStatuses: [200, 410] });
+  await h.submit(); await h.submit(); assert.equal(h.get("result").hidden, true); assert.equal(h.get("history-list").textContent, "");
+  assert(h.get("error").textContent.includes("新对话")); assert.equal(h.get("ask").disabled, true);
+  await h.submit(); assert.equal(h.calls.length, 3); await h.reset();
+  assert.equal(h.get("ask").disabled, false); assert.equal(h.eval("state.conversationId"), null);
+});
+
+test("bad conversation identities, turn counts or context stages cannot replace a verified turn", async () => {
+  const mutations = [data => { delete data.conversation; }, data => { data.conversation.id = "b".repeat(32); },
+    data => { data.conversation.turn = 8; }, data => { data.conversation.history_turns = 0; },
+    data => { data.conversation.retained_turns = 9; }, data => { data.conversation.effective_query = " "; },
+    data => { data.steps.shift(); }, data => { data.conversation.rewritten = "yes"; }];
+  for (const mutate of mutations) {
+    const bad = conversationResult(2); mutate(bad);
+    const h = await ready({ initial: conversationPlan(), response: [conversationResult(1), bad] });
+    await h.submit(); await h.submit(); assert.equal(h.get("result").hidden, true); assert.equal(h.get("error").hidden, false);
+    assert.equal(h.eval("state.turn"), 1); assert.equal(h.get("history-list").textContent, ""); assert.equal(h.calls.length, 3);
+  }
+});
+
+test("recent history is bounded, literal text and absent from a freshly opened page", async () => {
+  const responses = Array.from({ length: 5 }, (_, index) => conversationResult(index + 1));
+  const h = await ready({ initial: conversationPlan(), response: responses });
+  for (let i = 0; i < 5; i++) await h.submit();
+  assert.equal(h.get("history-list").children.length, 3); assert.equal(h.eval("state.turn"), 5);
+  assert(h.get("history-list").textContent.includes("<script>throw 1</script>")); assert.equal(h.get("history-list").querySelectorAll("script").length, 0);
+  assert(!page.includes("localStorage")); assert(!page.includes("sessionStorage"));
+  const refreshed = await ready({ initial: conversationPlan() }); assert.equal(refreshed.eval("state.conversationId"), null);
+  assert.equal(refreshed.get("history-list").textContent, ""); assert.equal(refreshed.calls.length, 1);
 });
