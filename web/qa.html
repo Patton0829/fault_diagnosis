@@ -147,6 +147,7 @@ function validatePlan(data) {
     requireValue(["embedding", "reranker", "chat", "http"].every(key => data.agent.max_request_counts[key] === { embedding: 2, reranker: 2, chat: 3, http: 11 }[key]));
   }
   if (data.storage !== undefined) requireValue(isObject(data.storage) && ["memory", "mysql"].includes(data.storage.backend) && typeof data.storage.persistent === "boolean" && data.storage.persistent === (data.storage.backend === "mysql") && typeof data.storage.notice === "string");
+  if (data.cache !== undefined) requireValue(isObject(data.cache) && ["none", "redis"].includes(data.cache.backend) && typeof data.cache.enabled === "boolean" && data.cache.enabled === (data.cache.backend === "redis") && data.cache.ttl_seconds === 300 && typeof data.cache.notice === "string");
   if (data.conversation !== undefined) requireValue(isObject(data.conversation) && data.conversation.max_history_turns === 3 && data.conversation.max_sessions === (data.storage?.persistent ? null : 16) && data.conversation.extra_chat_requests === 1 && typeof data.conversation.notice === "string");
   if (data.stream !== undefined) requireValue(isObject(data.stream) && data.stream.url === "/api/qa/stream" && data.stream.protocol === "qa-progress/v1" && data.stream.heartbeat_seconds === 10);
   return data;
@@ -163,11 +164,16 @@ function showAgentNotice() {
     const extra = state.conversationId ? 1 : 0;
     el("agent-notice").textContent = "所选回答服务额外接收问题、工具定义、子查询及每次前5块正文和必要审核标记，决定是否继续检索；不发送本机路径或向量。最多2轮：Embedding 2 / Reranker 2 / 聊天 " + (3 + extra) + "（含决策最多2次" + (extra ? "和追问改写1次" : "") + "），模型服务 HTTP 最多" + (11 + extra) + "次。不保证用满，工具检索本身不是多轮聊天，可能产生额外费用。";
   }
+  if (state.plan?.cache?.enabled) {
+    el("agent-notice").textContent += el("agent-mode").checked
+      ? " 本轮多步检索绕过缓存。"
+      : " 单次检索启用5分钟精确缓存：检索问题、索引快照和配置相同才可复用检索及重排证据，不缓存答案。命中不再向Embedding与重排服务发送本轮问题和正文，但每轮仍重新生成回答，可能产生费用。";
+  }
 }
 function showConversationNotice() {
   const supported = !!state.plan?.conversation;
   el("conversation-notice").hidden = !supported;
-  el("conversation-notice").textContent = supported ? "支持短期追问：后续会将最多3轮先前问答摘要发给当前所选模型服务，改写成独立问题；每轮追问额外1次聊天和HTTP，可能产生费用。历史只帮助理解指代，不当作事实证据，回答仍重新检索；切换模型后历史也会发送给新服务。" + (persistentStorage() ? "新对话只结束当前上下文，历史记录保留，不删除已保存问答。" : "新对话可清除，刷新不恢复。") : "";
+  el("conversation-notice").textContent = supported ? "支持短期追问：后续会将最多3轮先前问答摘要发给当前所选模型服务，改写成独立问题；每轮追问额外1次聊天和HTTP，可能产生费用。历史只帮助理解指代，不当作事实证据，回答仍依据本轮检索证据；切换模型后历史也会发送给新服务。" + (persistentStorage() ? "新对话只结束当前上下文，历史记录保留，不删除已保存问答。" : "新对话可清除，刷新不恢复。") : "";
   showStorageNotice();
 }
 function persistentStorage() { return state.plan?.storage?.backend === "mysql" && state.plan.storage.persistent === true; }
@@ -279,6 +285,11 @@ function validateAnswer(data, query, model, agentMode = false, conversation = nu
   } else requireValue(data.conversation === undefined);
   if (!agentMode) requireValue(execution.steps.join(",") === "retrieve,rerank,answer" && data.mode !== "agent");
   if (agentMode) validateAgentRun(execution);
+  if (data.cache !== undefined) {
+    requireValue(!agentMode && isObject(data.cache) && data.cache.backend === "redis" && ["hit", "miss"].includes(data.cache.status) && data.cache.ttl_seconds === 300);
+    const expected = data.cache.status === "hit" ? { embedding: 0, reranker: 0, chat: 1, http: 1 } : { embedding: 1, reranker: 1, chat: 1, http: 5 };
+    requireValue(Object.keys(expected).every(key => execution.request_counts[key] === expected[key]));
+  }
   requireValue(isObject(data.answer) && ["answered", "partial", "insufficient_evidence"].includes(data.answer.status) && Array.isArray(data.answer.claims) && strings(data.answer.missing_info) && isObject(data.sources));
   for (const [id, source] of Object.entries(data.sources)) {
     requireValue(/^S\d+$/.test(id) && isObject(source) && typeof source.chunk_id === "string" && typeof source.text === "string" && isObject(source.quotes) && Object.entries(source.quotes).every(([key, value]) => /^Q\d+$/.test(key) && typeof value === "string" && value.trim().length > 0 && source.text.includes(value)) && isObject(source.metadata));
@@ -369,13 +380,14 @@ function renderAnswer(data) {
   for (const item of data.answer.missing_info) el("missing-list").append(text("li", item));
   el("missing").hidden = data.answer.missing_info.length === 0;
   const counts = data.request_counts;
-  const completion = data.mode === "agent" ? "多步检索流程已结束" : "检索 → 重排 → 回答已完成";
+  const completion = data.mode === "agent" ? "多步检索流程已结束" : data.cache?.status === "hit" ? "复用检索与重排 → 回答已完成" : "检索 → 重排 → 回答已完成";
   el("run-summary").textContent = completion + " · " + data.elapsed_seconds.toFixed(2) + " 秒 · Embedding " + counts.embedding + " / Reranker " + counts.reranker + " / 聊天 " + counts.chat + "（模型服务 HTTP " + counts.http + "）";
   if (data.mode === "agent") {
     el("run-summary").textContent += " · 工具检索 " + data.agent.tool_calls.length + "/2，决策 " + data.agent.planner_calls + "次";
     for (const call of data.agent.tool_calls) el("agent-query-list").append(text("li", call.query));
     el("agent-searches").hidden = data.agent.tool_calls.length === 0;
   }
+  if (data.cache) el("run-summary").textContent += data.cache.status === "hit" ? " · 检索缓存命中（仍重新生成回答）" : " · 检索缓存未命中";
   showSources(data.sources);
   el("result").hidden = false;
 }

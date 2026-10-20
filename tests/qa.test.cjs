@@ -66,6 +66,15 @@ function savedConversation(turn = 3) {
   return { schema_version: "qa-conversation/v1", id: CONVERSATION_ID, turn,
     turns: Array.from({ length: Math.min(turn, 3) }, (_, index) => conversationResult(turn - Math.min(turn, 3) + index + 1)) };
 }
+function cachePlan(base = plan(), enabled = true) {
+  return { ...base, cache: { backend: enabled ? "redis" : "none", enabled, ttl_seconds: 300, notice: "只复用精确检索证据，不缓存答案。" } };
+}
+function cacheResult(status = "hit") {
+  const data = result();
+  data.cache = { backend: "redis", status, ttl_seconds: 300 };
+  if (status === "hit") data.request_counts = { embedding: 0, reranker: 0, chat: 1, http: 1 };
+  return data;
+}
 const frame = (event, data, newline = "\n") => "event: " + event + newline + JSON.stringify(data, null, 2).split("\n").map(line => "data: " + line).join(newline) + newline + newline;
 const progress = (stage, status = "started", newline = "\n") => frame("progress", { schema_version: "qa-progress/v1", stage, status }, newline);
 function syntheticStream(chunks, { open = false, failure = null } = {}) {
@@ -586,4 +595,89 @@ test("only an explicitly consistent persistent plan permits unbounded database-s
     const h = await ready({ initial, storedId: CONVERSATION_ID });
     assert.equal(h.get("ask").disabled, true); assert.equal(h.calls.length, 1); assert.equal(h.storageCalls.length, 0);
   }
+});
+
+test("optional exact-cache plan adds a compact disclosure without new controls or requests", async () => {
+  const h = await ready({ initial: cachePlan(agentPlan()) });
+  assert.equal(h.calls.length, 1); assert.equal(h.get("ask").disabled, false);
+  assert(h.get("agent-notice").textContent.includes("5分钟精确缓存"));
+  assert(h.get("agent-notice").textContent.includes("不缓存答案"));
+  assert(h.get("agent-notice").textContent.includes("每轮仍重新生成回答"));
+  h.get("agent-mode").checked = true; h.get("agent-mode").listeners.change();
+  assert(h.get("agent-notice").textContent.includes("多步检索绕过缓存")); assert.equal(h.calls.length, 1);
+  for (const initial of [plan(), cachePlan(plan(), false)]) {
+    const disabled = await ready({ initial }); assert(!disabled.get("agent-notice").textContent.includes("精确缓存"));
+  }
+});
+
+test("single-run cache hit and miss display actual requests without reusing an answer", async () => {
+  for (const status of ["hit", "miss"]) {
+    const h = await ready({ initial: cachePlan(), response: cacheResult(status) }); await h.submit();
+    assert.equal(h.calls.length, 2); assert.equal(h.get("result").hidden, false); assert.equal(h.get("error").hidden, true);
+    assert(h.get("run-summary").textContent.includes(status === "hit" ? "检索缓存命中（仍重新生成回答）" : "检索缓存未命中"));
+    assert(h.get("run-summary").textContent.includes(status === "hit" ? "Embedding 0 / Reranker 0 / 聊天 1" : "Embedding 1 / Reranker 1 / 聊天 1"));
+    if (status === "hit") assert(h.get("run-summary").textContent.startsWith("复用检索与重排 → 回答已完成"));
+    assert(h.get("claims").textContent.includes("合成回答"));
+  }
+  const old = await ready({ initial: cachePlan(), response: result() }); await old.submit();
+  assert.equal(old.get("result").hidden, false); assert(!old.get("run-summary").textContent.includes("检索缓存"));
+});
+
+test("cache hit follow-up includes one new rewrite and one fresh answer, but no embedding or reranking", async () => {
+  const h = await ready({ initial: cachePlan(conversationPlan()), response: [conversationResult(1, cacheResult("miss")), conversationResult(2, cacheResult())] });
+  await h.submit(); await h.submit();
+  assert.equal(h.get("result").hidden, false); assert.equal(h.eval("state.turn"), 2);
+  assert(h.get("run-summary").textContent.includes("Embedding 0 / Reranker 0 / 聊天 2"));
+  assert(h.get("run-summary").textContent.includes("HTTP 2")); assert(h.get("run-summary").textContent.includes("缓存命中"));
+  assert.equal(h.get("history-list").children.length, 1); assert.equal(h.calls.length, 3);
+});
+
+test("mysql refresh validates stored cache outcomes even after caching has been disabled", async () => {
+  const loaded = savedConversation();
+  loaded.turns[0] = conversationResult(1, cacheResult("miss"));
+  loaded.turns[1] = conversationResult(2, cacheResult());
+  loaded.turns[2] = conversationResult(3, cacheResult());
+  const h = await ready({ initial: cachePlan(mysqlPlan(), false), storedId: CONVERSATION_ID, loadResponse: loaded });
+  assert.equal(h.calls.length, 2); assert.equal(h.calls[1].url, "/api/qa/conversation/load");
+  assert.equal(h.get("result").hidden, false); assert.equal(h.eval("state.turn"), 3);
+  assert(h.get("status").textContent.includes("未重新检索或调用模型"));
+  assert(h.get("run-summary").textContent.includes("检索缓存命中（仍重新生成回答）"));
+  assert(h.get("run-summary").textContent.includes("聊天 2")); assert.equal(h.get("history-list").children.length, 2);
+});
+
+test("inconsistent cache plans fail closed before submitting a model request", async () => {
+  const mutations = [data => { data.cache.backend = "memory"; }, data => { data.cache.enabled = false; },
+    data => { data.cache.ttl_seconds = 600; }, data => { data.cache.enabled = "yes"; }, data => { delete data.cache.notice; }];
+  for (const mutate of mutations) {
+    const initial = cachePlan(); mutate(initial);
+    const h = await ready({ initial }); await h.submit();
+    assert.equal(h.get("ask").disabled, true); assert.equal(h.get("result").hidden, true); assert.equal(h.calls.length, 1);
+  }
+});
+
+test("cache status must agree with actual single-run counts and can never label an agent run", async () => {
+  const mutations = [data => { data.cache.status = "bypass"; }, data => { data.cache.backend = "none"; },
+    data => { data.cache.ttl_seconds = 0; }, data => { data.request_counts.embedding = 1; },
+    data => { data.request_counts.reranker = 1; }, data => { data.request_counts.chat = 0; },
+    data => { data.request_counts.http = 5; }, data => { data.cache = null; }];
+  for (const mutate of mutations) {
+    const response = cacheResult(); mutate(response);
+    const h = await ready({ initial: cachePlan(), response }); await h.submit();
+    assert.equal(h.get("result").hidden, true); assert.equal(h.get("error").hidden, false); assert.equal(h.calls.length, 2);
+  }
+  const badMiss = cacheResult("miss"); badMiss.request_counts.reranker = 0;
+  const missed = await ready({ initial: cachePlan(), response: badMiss }); await missed.submit(); assert.equal(missed.get("result").hidden, true);
+  const badAgent = agentResult(); badAgent.cache = cacheResult().cache;
+  const agent = await ready({ initial: cachePlan(agentPlan()), response: badAgent }); agent.get("agent-mode").checked = true; await agent.submit();
+  assert.equal(agent.get("result").hidden, true); assert.equal(agent.get("error").hidden, false);
+});
+
+test("invalid cached follow-up and stored cache count mismatches do not advance or restore history", async () => {
+  const invalid = conversationResult(2, cacheResult()); invalid.request_counts.chat = 1;
+  const h = await ready({ initial: cachePlan(conversationPlan()), response: [conversationResult(1), invalid] }); await h.submit(); await h.submit();
+  assert.equal(h.get("result").hidden, true); assert.equal(h.eval("state.turn"), 1); assert.equal(h.get("history-list").textContent, "");
+  const loaded = savedConversation(); loaded.turns[1] = conversationResult(2, cacheResult()); loaded.turns[1].request_counts.http++;
+  const restored = await ready({ initial: mysqlPlan(), storedId: CONVERSATION_ID, loadResponse: loaded });
+  assert.equal(restored.get("result").hidden, true); assert.equal(restored.get("ask").disabled, true);
+  assert.equal(restored.get("history-list").textContent, ""); assert.equal(restored.storageValues.get(STORAGE_KEY), CONVERSATION_ID);
 });

@@ -81,7 +81,15 @@ def _sources(result: dict) -> dict[str, RerankedHit]:
     require(result.get("mode") == "hybrid" and "answer_generation" not in result, "须使用尚未生成回答的混合检索轮次")
     require(isinstance(result.get("experiment_id"), str) and bool(result["experiment_id"].strip()), "缺少实验身份")
     counts = result["request_counts"]
-    require(counts["reranker"] == 1 and counts["chat"] == 0, "须先完成一次重排")
+    cached = False
+    if "cache" in result:
+        from qa_platform.storage.retrieval_cache import validate_info
+
+        cached = validate_info(result["cache"])["status"] == "hit"
+    require(counts["reranker"] == (0 if cached else 1) and counts["chat"] == 0,
+            "须先完成一次重排或复用已校验的重排缓存")
+    if cached:
+        require(counts["embedding"] == 0, "命中缓存不得冒称新增问题编码")
     routes = result["routes"]
     baseline = {
         **result,

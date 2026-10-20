@@ -79,9 +79,12 @@ class ConversationResetRequest(BaseModel):
     conversation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
-def create_app(index_dir: Path = DEFAULT_INDEX, *, conversation_store=None, storage_backend: str = "memory") -> FastAPI:
+def create_app(index_dir: Path = DEFAULT_INDEX, *, conversation_store=None, storage_backend: str = "memory",
+               retrieval_cache=None, cache_backend: str = "none") -> FastAPI:
     if storage_backend not in {"memory", "mysql"} or (storage_backend == "mysql" and conversation_store is None):
         raise ValueError("MySQL模式须显式传入已检查的存储；不隐式初始化或回退内存。")
+    if cache_backend not in {"none", "redis"} or (cache_backend == "redis") != (retrieval_cache is not None):
+        raise ValueError("Redis模式须显式传入缓存；不自动启动服务器或静默回退。")
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
     busy = Lock()
@@ -130,6 +133,12 @@ def create_app(index_dir: Path = DEFAULT_INDEX, *, conversation_store=None, stor
         from qa_platform.workflows.live_rag import describe
 
         plan = describe()  # 不读密钥/索引，不启动图或模型请求。
+        if cache_backend == "redis":
+            from qa_platform.storage.retrieval_cache import describe as describe_cache
+
+            plan["cache"] = describe_cache()
+            plan["notice"] += ("当前启用5分钟精确检索缓存：单次未命中仍按原预算，命中仅新增1次回答聊天HTTP；"
+                               "追问仍额外改写一次，多步模式绕过缓存。")
         if storage_backend == "mysql":
             notice = ("MySQL保存成功问答、实际引用原文、公开来源信息、请求计数和摘要；"
                       "每次追问仍只取最近3轮摘要补全指代，不把历史当证据。"
@@ -253,8 +262,11 @@ def create_app(index_dir: Path = DEFAULT_INDEX, *, conversation_store=None, stor
             report("contextualize", "started")
             effective_query = contextualize(query, history, payload.model)
             report("contextualize", "completed")
-        # 每轮重新检索；历史仅解析指代，不当作本轮回答的事实证据。
-        result = run(effective_query, payload.model, index_dir)
+        # 每轮依据独立问题获取证据（可复用检索缓存）；历史不当作事实证据。
+        # 多步检索暂保持原行为；缓存只复用单次链路的检索/重排，不复用最终答案。
+        result = (run(effective_query, payload.model, index_dir, retrieval_cache=retrieval_cache)
+                  if retrieval_cache is not None and payload.mode == "single"
+                  else run(effective_query, payload.model, index_dir))
         check_cancelled()
         if payload.conversation:
             if result["query"] != effective_query or result["model"] != payload.model:
@@ -564,6 +576,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--storage", choices=("memory", "mysql"), default="memory",
                         help="默认内存；mysql需先运行setup_mysql.py --bootstrap，不自动建库或回退")
+    parser.add_argument("--cache", choices=("none", "redis"), default="none",
+                        help="默认关闭；redis为本机6379的5分钟精确检索/重排缓存，不缓存最终回答")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port须为1024～65535")
@@ -571,6 +585,7 @@ def main() -> int:
 
     engine = None
     store = None
+    retrieval_cache = None
     if args.storage == "mysql":
         try:
             from qa_platform.storage.mysql_setup import make_engine, read_config
@@ -585,9 +600,23 @@ def main() -> int:
             print("[未启动] MySQL配置/依赖/服务/表结构未就绪；请运行setup_mysql.py --check。未回退内存或请求模型。")
             return 1
 
+    if args.cache == "redis":
+        try:
+            from qa_platform.storage.retrieval_cache import RetrievalCache
+
+            retrieval_cache = RetrievalCache()
+            retrieval_cache.ping()
+        except Exception:
+            if engine is not None:
+                engine.dispose()
+            if retrieval_cache is not None:
+                retrieval_cache.close()
+            print("[未启动] 本机Redis或客户端未就绪；未启动服务、未回退、不请求模型。可显式使用--cache none。")
+            return 1
+
     print(f"[打开] http://127.0.0.1:{args.port}/；仅本机，不发布。")
     print(f"[问答] http://127.0.0.1:{args.port}/qa；一次提问由LangGraph自动完成真实检索、重排和回答。")
-    print("[问答计划] 默认单次：问题Embedding、云端重排、聊天各1次，另有2次身份GET。")
+    print("[问答计划] 缓存关闭/未命中：Embedding、重排、聊天各1次+2次身份GET；Redis命中：只新增回答聊天1次。")
     print("[多步可选] Flash原生工具循环：最多2次检索；Embedding2/重排2/聊天3，共最多11次HTTP；不自动重试。")
     print("[计划] 打开页面0模型；仅BM25=0；三路对照=1次本地问题Embedding+2次身份GET。")
     print("[重排] 三路完成后可主动点击：固定同一并集，读密钥并向云端发送问题与正文，增加1次HTTP；可能收费。")
@@ -596,10 +625,14 @@ def main() -> int:
     print(f"[编排] http://127.0.0.1:{args.port}/workflow；独立教学合成快照，普通函数与LangGraph零模型回放。")
     print("[边界] 打开页面/普通检索不读.env、不请求云端；不重编码文档、不执行命令、不写报告，无自动重试。")
     print(f"[会话存储] {args.storage}；MySQL模式保存成功问答与引用，默认内存模式重启丢失。")
+    print(f"[检索缓存] {args.cache}；仅单次链路；Redis精确匹配有效5分钟，命中仍重新生成回答。")
     try:
-        uvicorn.run(create_app(conversation_store=store, storage_backend=args.storage),
+        uvicorn.run(create_app(conversation_store=store, storage_backend=args.storage,
+                               retrieval_cache=retrieval_cache, cache_backend=args.cache),
                     host="127.0.0.1", port=args.port, access_log=False)
     finally:
+        if retrieval_cache is not None:
+            retrieval_cache.close()
         if engine is not None:
             engine.dispose()
     return 0

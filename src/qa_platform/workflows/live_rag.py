@@ -35,14 +35,19 @@ class LiveRAGState(TypedDict, total=False):
     result: dict
 
 
-def build_graph(index_dir: Path):
+def build_graph(index_dir: Path, *, retrieval_cache=None):
     """注册已有业务函数，不在建图时连接数据库或调用模型。"""
     from langgraph.graph import END, START, StateGraph
 
+    prepared = None  # 每次建图只供本轮使用，不跨请求共享问题或语料状态。
+
     def retrieve(state: LiveRAGState) -> dict:
+        nonlocal prepared
         report("retrieve", "started")
         check = hybrid.prepare(index_dir, state["query"])
-        result = hybrid.compare(check, "hybrid")
+        prepared = check
+        cached = retrieval_cache.get(check) if retrieval_cache is not None else None
+        result = cached if cached is not None else hybrid.compare(check, "hybrid")
         # 旧回答接口要求本轮身份；该值只在服务端传递，不由模型或浏览器提供。
         result["experiment_id"] = uuid4().hex
         report("retrieve", "completed")
@@ -50,7 +55,15 @@ def build_graph(index_dir: Path):
 
     def rerank(state: LiveRAGState) -> dict:
         report("rerank", "started")
-        result = reranking.rerank(state["result"])
+        result = state["result"]
+        if result.get("cache", {}).get("status") != "hit":
+            result = reranking.rerank(result)
+            if retrieval_cache is not None:
+                from qa_platform.workflows.progress import check_cancelled
+
+                check_cancelled()
+                retrieval_cache.put(prepared, result)
+                result = {**result, "cache": {"backend": "redis", "status": "miss", "ttl_seconds": 300}}
         report("rerank", "completed")
         return {"result": result}
 
@@ -74,12 +87,15 @@ def build_graph(index_dir: Path):
 class RAGRunError(RuntimeError):
     """只携带固定阶段名；不向API泄露原始响应、密钥或未经校验的正文。"""
 
-    def __init__(self, stage: str, completed_steps: list[str]):
+    def __init__(self, stage: str, completed_steps: list[str], *, cache_failure: bool = False):
         self.stage = stage
         self.completed_steps = list(completed_steps)
         labels = {"retrieve": "混合检索", "rerank": "云端重排", "answer": "回答生成或引用校验"}
+        cache_note = ("Redis缓存不可用或合同校验失败；请检查本机Redis，或显式关闭缓存后重新启动服务。"
+                      if cache_failure else "")
         super().__init__(
             f"{labels[stage]}未完成；已完成{len(completed_steps)}个阶段。"
+            + cache_note +
             "未展示未经校验的回答；失败前请求可能已发生并产生费用，不自动重试。"
             "再次点击提问会从检索开始新的一轮。"
         )
@@ -129,11 +145,21 @@ def _public_result(result: dict, model: str) -> dict:
                         "title", "section_path", "source_url", "review_status", "kubernetes_version",
                     ) if key in row["metadata"]},
                 }
-    return {"query": result["query"], "model": model, "answer": answer,
-            "sources": sources, "request_counts": result["request_counts"]}
+    public = {"query": result["query"], "model": model, "answer": answer,
+              "sources": sources, "request_counts": result["request_counts"]}
+    if "cache" in result:
+        from qa_platform.storage.retrieval_cache import validate_info
+
+        public["cache"] = validate_info(result["cache"])
+        hit = public["cache"]["status"] == "hit"
+        expected = {"embedding": 0 if hit else 1, "reranker": 0 if hit else 1,
+                    "chat": 1, "http": 1 if hit else 5}
+        if public["request_counts"] != expected:
+            raise ValueError("缓存状态与本轮实际请求计数不一致")
+    return public
 
 
-def run(query: str, model: str, index_dir: Path) -> dict:
+def run(query: str, model: str, index_dir: Path, *, retrieval_cache=None) -> dict:
     """一次stream驱动三个真实节点；任一步失败即停止，不循环或隐式重试。"""
     if not isinstance(query, str) or not query.strip() or len(query) > 2000:
         raise ValueError("问题须为1～2000字符")
@@ -143,7 +169,8 @@ def run(query: str, model: str, index_dir: Path) -> dict:
     try:
         # 即使环境开启追踪，也不把问题、文档和模型输出交给第三方追踪服务。
         with tracing_context(enabled=False):
-            graph = build_graph(index_dir)
+            graph = (build_graph(index_dir) if retrieval_cache is None
+                     else build_graph(index_dir, retrieval_cache=retrieval_cache))
             for update in graph.stream(
                 {"query": query.strip(), "model": model},
                 config={"callbacks": [], "recursion_limit": 10}, stream_mode="updates",
@@ -158,8 +185,13 @@ def run(query: str, model: str, index_dir: Path) -> dict:
             public = _public_result(result, model)
     except RunCancelled:
         raise
-    except Exception:
+    except Exception as exc:
         stage = PIPELINE[min(len(completed), len(PIPELINE) - 1)]
-        raise RAGRunError(stage, completed) from None
+        cache_failure = False
+        if retrieval_cache is not None:
+            from qa_platform.storage.retrieval_cache import CacheError
+
+            cache_failure = isinstance(exc, CacheError)
+        raise RAGRunError(stage, completed, cache_failure=cache_failure) from None
     return {"schema_version": "rag-live/v1", **public, "steps": completed,
             "elapsed_seconds": round(perf_counter() - started, 3)}

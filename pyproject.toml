@@ -19,6 +19,7 @@ dependencies = [
 milvus = ["pymilvus==2.6.17", "milvus-lite==3.2.2"]
 workflow = ["langgraph==1.2.16", "langsmith>=0.14.9,<1.0.0"]
 database = ["SQLAlchemy>=2.0,<2.1", "PyMySQL[rsa]>=1.1,<2"]
+cache = ["redis==8.1.0"]
 dev = ["pytest", "ruff"]
 
 [tool.setuptools.packages.find]

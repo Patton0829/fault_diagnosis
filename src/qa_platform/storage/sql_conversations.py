@@ -99,6 +99,18 @@ def _public_payload(result: dict) -> dict:
     if type(elapsed) not in (int, float) or not isfinite(elapsed) or elapsed < 0:
         raise ValueError("耗时无效")
     public["elapsed_seconds"] = elapsed
+    if "cache" in result:
+        from qa_platform.storage.retrieval_cache import validate_info
+
+        if result.get("mode") == "agent" or "agent" in result:
+            raise ValueError("多步检索本阶段不使用缓存")
+        public["cache"] = validate_info(result["cache"])
+        hit = public["cache"]["status"] == "hit"
+        extra = 1 if steps and steps[0] == "contextualize" else 0
+        expected = {"embedding": 0 if hit else 1, "reranker": 0 if hit else 1,
+                    "chat": 1 + extra, "http": (1 if hit else 5) + extra}
+        if public["request_counts"] != expected:
+            raise ValueError("缓存状态与持久化请求计数不一致")
     if "mode" in result:
         if result["mode"] not in {"single", "agent"}:
             raise ValueError("问答模式无效")
