@@ -14,8 +14,8 @@
 | --- | --- |
 | ① 文档处理与检索 | 已有清洗、切块、Embedding、Milvus和混合检索；多格式解析、跨版本增量更新及正式评测仍待补 |
 | ② 单轮RAG | 已有真实检索、重排、结构化回答、来源引用、拒答及简单页面 |
-| ③ LangGraph辅助诊断 | 当前阶段：已有真实单轮图、原生工具循环及最近3轮短期追问；更多诊断工具、澄清策略与持久记忆仍待补 |
-| ④ 平台工程、部署与评测 | 已有FastAPI基础；SSE、MySQL/SQLAlchemy、Redis、vLLM、Docker Compose及系统化质量评测尚未完成 |
+| ③ LangGraph辅助诊断 | 最小主流程已有真实单轮图、原生工具循环及最近3轮短期追问；更多诊断工具、澄清策略与持久记忆仍待补 |
+| ④ 平台工程、部署与评测 | 当前开始：已有FastAPI与SSE阶段进度；MySQL/SQLAlchemy、Redis、vLLM、Docker Compose及系统化质量评测尚未完成 |
 
 保持简单页面，逐步补齐核心能力；教学分支/审批回放不能当作真实Agent已经完成。当前使用Kubernetes文档复现技术路线，不把它表述为真实铁路故障知识或已部署的现场诊断系统。
 
@@ -36,6 +36,7 @@ fault_diagnosis/
 │       ├── rag/                   # 回答、引用校验、评测和Milvus对照
 │       ├── workflows/             # live_rag.py单轮；agent_rag.py工具循环；其余为合成教学
 │       ├── web_app.py             # 文档处理可视化的后端
+│       ├── web_stream.py          # 工作线程→SSE进度桥接，不转发模型Token
 │       └── retrieval_lab.py       # 独立检索学习台，不改变原清洗台的零模型约定
 ├── scripts/                      # 运行入口，不承载业务实现
 ├── tests/                        # 目录/语料兼容、缓存与入库的离线测试
@@ -229,6 +230,20 @@ START → plan ──提出合法工具调用──→ search
 新增`src/qa_platform/workflows/conversation.py`负责内存摘要与一次改写；`retrieval_lab.py`在共用锁内串联取历史、改写、原图及成功提交；`live_rag.py`仅扩展配置与说明；`web/qa.html`保留简单页面。`tests/test_conversation.py`验证会话隔离、历史裁剪、失败不追加、改写协议、默认单轮兼容及请求计数；前端会话测试合并到`tests/qa.test.cjs`。消息状态由应用管理的思路参考[OpenAI Docs会话状态说明](https://developers.openai.com/api/docs/guides/conversation-state)，实际仍使用现有第三方兼容服务，未改为OpenAI托管会话。
 
 2026-10-20真实浏览器验收：先问“Pod 里访问 Service 域名时 DNS 解析失败，应该检查哪些地方？”，97.38秒、`partial`、HTTP5；再追问“那它里面的 nameserver 和 search 应该怎么看？”，实际改写为“在排查 Pod 内 Service 域名 DNS 解析失败时，如何检查 Pod 内本地 DNS 配置文件中的 nameserver 和 search 字段？”，102.83秒、`answered`、HTTP6。两轮各重新编码一个问题、重排一次，第二轮聊天2次（改写+回答），历史及独立问题可在页面展开。没有为提速而省略重新检索，也没有把该样例当作正确率证明。全量离线测试741项通过、4项既有依赖警告；前端Node测试25项通过。验收记录和截图仅保留本机`reports/conversation-*-2026-10-20.*`，未提交Git。
+
+### SSE实时阶段进度：可见等待，不提前显示未校验答案
+
+`/qa`现在使用`fetch`主动POST到`/api/qa/stream`，接收`text/event-stream`。同一条请求依次收到实际节点的开始/完成通知：理解追问、规划、检索、重排、生成与校验。页面仍只有原状态文字，不加大对照台、虚构百分比或定时模拟进度。该改动不增加模型调用，也不改变原单次/多步/追问预算；SSE本机HTTP不计入模型服务HTTP。
+
+这是**阶段进度流，不是逐字答案流**。进度只携带固定阶段名与状态，不含问题、证据、Token、密钥或模型草稿。后端校验完成并处理本轮会话后才发送唯一`result`终态，前端完整收到终态、流结束且原回答校验通过，才展示答案和追加历史。运行失败发送固定脱敏`error`，前置的403/409/410/422仍在流头之前返回。每10秒的注释心跳只维持连接，不代表完成了工作。
+
+浏览器断开后不会自动重连、重试或回退JSON重复付费。已发出的同步SDK请求无法强行撤销，可能继续运行并计费；程序在后续阶段边界合作停止，收到取消标记后在提交会话前再检查。全局忙碌锁由工作线程真正退出时释放，不因网页离线提前放开。已经提交的事务不承诺回滚，断线也不能用来推断“没有生成、没有费用”。事件队列最多64条；仍是本机单任务实现，尚未验证生产代理、并发部署或服务重启恢复。
+
+原`POST /api/qa`保留JSON接口，页面只有在配置缺少stream时才选择旧接口；一旦已启动流，绝不因失败再调用旧接口。客户端支持UTF-8分片、LF/CRLF、多行data和注释，有缓冲长度上限；未知事件、坏JSON、重复终态、截断或缺终态一律拒绝，不保存旧答案冒充新结果。
+
+实现文件：`workflows/progress.py`用ContextVar隔离本次通知与取消；原图和知识工具在真实工作前后报告阶段；`web_stream.py`用一个同步工作线程和有界异步队列桥接到StreamingResponse；`retrieval_lab.py`让JSON与SSE共用执行逻辑及校验；`web/qa.html`解析进度但只渲染已校验终态。协议参考[MDN的SSE事件格式](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events)，响应实现参考[Starlette StreamingResponse](https://starlette.dev/responses/#streamingresponse)。
+
+2026-10-20，真实浏览器提问“Pod 与 Service 不在同一命名空间时，DNS 查询应该指定什么？请简短回答。”：答案到达前实际看到“混合检索中…”，最后收到`answered`及原文引用，20.50秒，Embedding1/重排1/聊天1/HTTP5。此问题和前轮不同，不能把耗时差归因于SSE；SSE也不保证模型生成更快。断线、心跳、失败、多步与追问进度使用离线测试验证，不冒充新增真实模型样例。全量765项测试通过、4项既有警告；Node前端32项通过。`tests/test_qa_stream.py`含原始ASGI测试，证明工作尚未结束时已交付进度，不能仅凭会缓冲的TestClient断言实时性。本机验收记录在`reports/sse-acceptance-2026-10-20.json`，不提交Git。
 
 ### 查看本地编码计划
 

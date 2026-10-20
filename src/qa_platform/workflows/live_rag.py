@@ -11,6 +11,7 @@ from qa_platform.rag import kubernetes_answer as answering
 from qa_platform.rag.answering import GroundedAnswer
 from qa_platform.retrieval import kubernetes_hybrid as hybrid
 from qa_platform.retrieval import kubernetes_rerank as reranking
+from qa_platform.workflows.progress import RunCancelled, report
 
 
 PIPELINE = ("retrieve", "rerank", "answer")
@@ -39,18 +40,26 @@ def build_graph(index_dir: Path):
     from langgraph.graph import END, START, StateGraph
 
     def retrieve(state: LiveRAGState) -> dict:
+        report("retrieve", "started")
         check = hybrid.prepare(index_dir, state["query"])
         result = hybrid.compare(check, "hybrid")
         # 旧回答接口要求本轮身份；该值只在服务端传递，不由模型或浏览器提供。
         result["experiment_id"] = uuid4().hex
+        report("retrieve", "completed")
         return {"result": result}
 
     def rerank(state: LiveRAGState) -> dict:
-        return {"result": reranking.rerank(state["result"])}
+        report("rerank", "started")
+        result = reranking.rerank(state["result"])
+        report("rerank", "completed")
+        return {"result": result}
 
     def answer(state: LiveRAGState) -> dict:
+        report("answer", "started")
         # generate内部已完成段落引用准备、一次生成、JSON/引用校验。
-        return {"result": answering.generate(state["result"], state["model"])}
+        result = answering.generate(state["result"], state["model"])
+        report("answer", "completed")
+        return {"result": result}
 
     builder = StateGraph(LiveRAGState)
     for name, function in (("retrieve", retrieve), ("rerank", rerank), ("answer", answer)):
@@ -80,6 +89,7 @@ def describe() -> dict:
     """打开页面只读固定配置，不加载密钥、索引或模型客户端。"""
     from qa_platform.workflows.agent_rag import describe as describe_agent
     from qa_platform.workflows.conversation import describe as describe_conversation
+    from qa_platform.web_stream import describe as describe_stream
 
     config = answering.describe()
     return {
@@ -88,6 +98,7 @@ def describe() -> dict:
         "reranker": {key: reranking.describe()[key] for key in ("model", "url")},
         "pipeline": list(PIPELINE), "notice": NOTICE, "agent": describe_agent(),
         "conversation": describe_conversation(),
+        "stream": describe_stream(),
     }
 
 
@@ -143,6 +154,8 @@ def run(query: str, model: str, index_dir: Path) -> dict:
             if completed != list(PIPELINE) or result["query"] != query.strip():
                 raise ValueError("本轮执行不完整或问题不匹配")
             public = _public_result(result, model)
+    except RunCancelled:
+        raise
     except Exception:
         stage = PIPELINE[min(len(completed), len(PIPELINE) - 1)]
         raise RAGRunError(stage, completed) from None

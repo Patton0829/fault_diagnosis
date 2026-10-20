@@ -13,6 +13,7 @@ from qa_platform.rag.quote_units import PARAGRAPH_STRATEGY
 from qa_platform.retrieval import kubernetes_hybrid as hybrid
 from qa_platform.retrieval import kubernetes_rerank as reranking
 from qa_platform.retrieval.pipeline import RerankedHit
+from qa_platform.workflows.progress import report
 
 
 TOOL_NAME = "search_knowledge"
@@ -71,14 +72,18 @@ def search_knowledge(
     index_dir: Path, query: str, *, expected_contract: str | None = None,
 ) -> dict:
     """一次问题编码、一次重排；模型或索引合同变化时在发请求前停止。"""
+    report("retrieve", "started")
     args = SearchArgs.model_validate({"query": query})
     check = hybrid.prepare(index_dir, args.query)
     contract = _contract(check["plan"])
     require(expected_contract is None or contract == expected_contract, "多步检索的知识/模型合同已变化")
     result = hybrid.compare(check, "hybrid")
     result["experiment_id"] = uuid4().hex
+    report("retrieve", "completed")
+    report("rerank", "started")
     result = reranking.rerank(result)
     sources = answering._sources(result)
+    report("rerank", "completed")
     return {"result": result, "contract": contract, "sources": sources}
 
 

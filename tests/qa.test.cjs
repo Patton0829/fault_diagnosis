@@ -55,6 +55,26 @@ function conversationResult(turn = 1, data = result()) {
   if (turn > 1) { value.steps.unshift("contextualize"); value.request_counts.chat++; value.request_counts.http++; }
   return value;
 }
+function streamPlan(base = plan()) {
+  return { ...base, stream: { url: "/api/qa/stream", protocol: "qa-progress/v1", heartbeat_seconds: 10 } };
+}
+const frame = (event, data, newline = "\n") => "event: " + event + newline + JSON.stringify(data, null, 2).split("\n").map(line => "data: " + line).join(newline) + newline + newline;
+const progress = (stage, status = "started", newline = "\n") => frame("progress", { schema_version: "qa-progress/v1", stage, status }, newline);
+function syntheticStream(chunks, { open = false, failure = null } = {}) {
+  const encoder = new TextEncoder();
+  let controller;
+  const stream = new ReadableStream({ start(value) {
+    controller = value;
+    for (const chunk of chunks) controller.enqueue(typeof chunk === "string" ? encoder.encode(chunk) : chunk);
+    if (failure) controller.error(new Error(failure));
+    else if (!open) controller.close();
+  } });
+  const stats = { cancelled: 0, released: 0 };
+  return { response: { headers: { get: () => "text/event-stream; charset=utf-8" }, body: { getReader() {
+    const reader = stream.getReader();
+    return { read: () => reader.read(), cancel: async () => { stats.cancelled++; await reader.cancel(); }, releaseLock: () => { stats.released++; reader.releaseLock(); } };
+  } } }, stats, push: value => controller.enqueue(typeof value === "string" ? encoder.encode(value) : value), close: () => controller.close() };
+}
 
 class Element {
   constructor(tag = "div") {
@@ -74,7 +94,7 @@ class Element {
   }
 }
 function harness({ initial = plan(), response = result(), getFailure = false,
-  postFailure = null, deferred = false, responseStatuses = [], resetFailure = false } = {}) {
+  postFailure = null, deferred = false, responseStatuses = [], resetFailure = false, streams = [] } = {}) {
   const elements = new Map([...page.matchAll(/<([a-z][\w-]*)\b([^>]*\bid="([^"]+)"[^>]*)>/gi)].map(match => {
     const element = new Element(match[1]); element.hidden = /\bhidden\b/.test(match[2]);
     element.disabled = /\bdisabled\b/.test(match[2]); return [match[3], element];
@@ -84,16 +104,16 @@ function harness({ initial = plan(), response = result(), getFailure = false,
     calls.push({ url, options });
     if (url === "/api/qa/plan") return { ok: !getFailure, status: getFailure ? 503 : 200, json: async () => clone(initial) };
     if (url === "/api/qa/conversation/reset") return { ok: !resetFailure, status: resetFailure ? 409 : 200, json: async () => ({ cleared: true }) };
-    assert.equal(url, "/api/qa");
+    assert.equal(url, initial.stream ? "/api/qa/stream" : "/api/qa");
     const currentIndex = postIndex++;
     if (deferred) await new Promise(resolve => pending.push(resolve));
     if (postFailure === "network") throw new Error("synthetic transport failure");
     const status = postFailure === "http" ? 503 : responseStatuses[currentIndex] || 200;
-    return { ok: status >= 200 && status < 300, status,
+    return { ok: status >= 200 && status < 300, status, ...(streams[currentIndex]?.response || {}),
       json: async () => { if (postFailure === "json") throw new Error("synthetic invalid JSON");
         return clone(postFailure === "http" ? { detail: "本次生成失败，未得到校验通过的回答。" } : Array.isArray(response) ? response[currentIndex] : response); } };
   };
-  const context = vm.createContext({ document: { getElementById: id => elements.get(id), createElement: tag => new Element(tag) }, fetch, URL });
+  const context = vm.createContext({ document: { getElementById: id => elements.get(id), createElement: tag => new Element(tag) }, fetch, URL, TextDecoder });
   vm.runInContext(script, context);
   return { calls, get: id => elements.get(id), eval: code => vm.runInContext(code, context),
     reset: () => elements.get("new-conversation").listeners.click(), finish: () => pending.shift()(), submit: () => {
@@ -372,4 +392,89 @@ test("recent history is bounded, literal text and absent from a freshly opened p
   assert(!page.includes("localStorage")); assert(!page.includes("sessionStorage"));
   const refreshed = await ready({ initial: conversationPlan() }); assert.equal(refreshed.eval("state.conversationId"), null);
   assert.equal(refreshed.get("history-list").textContent, ""); assert.equal(refreshed.calls.length, 1);
+});
+
+test("streaming POST updates real stage status before completion and keeps old answers hidden until EOF", async () => {
+  const stream = syntheticStream([progress("retrieve"), progress("retrieve", "completed"), progress("answer")], { open: true });
+  const h = await ready({ initial: streamPlan(conversationPlan()), streams: [stream] });
+  const pending = h.submit(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.calls[1].url, "/api/qa/stream"); assert.equal(h.calls[1].options.method, "POST");
+  assert.equal(h.calls[1].options.headers["X-Retrieval-Lab"], "1"); assert.equal(h.calls[1].options.credentials, "same-origin");
+  assert(h.get("status").textContent.includes("生成与校验回答中…")); assert(h.get("status").textContent.includes("最近完成：混合检索"));
+  assert.equal(h.get("result").hidden, true); assert.equal(h.get("ask").disabled, true); assert.equal(h.get("new-conversation").disabled, true);
+  await h.submit(); await h.reset(); assert.equal(h.calls.length, 2);
+  stream.push(frame("result", conversationResult(1))); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.get("result").hidden, true); assert.equal(h.eval("state.turn"), 0);
+  stream.close(); await pending;
+  assert.equal(h.get("result").hidden, false); assert.equal(h.eval("state.turn"), 1); assert.equal(h.get("ask").disabled, false);
+  assert.equal(stream.stats.cancelled, 0); assert.equal(stream.stats.released, 1);
+});
+
+test("SSE handles fragmented UTF-8, CRLF, comments and multiline data without treating heartbeats as progress", async () => {
+  const content = ": keep-alive\r\n\r\n" + progress("rerank", "started", "\r\n") + frame("result", result(), "\r\n");
+  const bytes = new TextEncoder().encode(content);
+  const stream = syntheticStream(Array.from(bytes, byte => Uint8Array.of(byte)));
+  const h = await ready({ initial: streamPlan(), streams: [stream] }); await h.submit();
+  assert.equal(h.get("result").hidden, false); assert.equal(h.get("error").hidden, true);
+  assert(h.get("claims").textContent.includes("合成回答")); assert.equal(stream.stats.released, 1);
+  assert(!h.get("status").textContent.includes("keep-alive")); assert.equal(h.calls.length, 2);
+});
+
+test("a heartbeat alone changes no stage and a stream without a terminal never produces an answer", async () => {
+  const stream = syntheticStream([": keep-alive\n\n"], { open: true });
+  const h = await ready({ initial: streamPlan(), streams: [stream] }); const pending = h.submit();
+  await new Promise(resolve => setImmediate(resolve));
+  assert(h.get("status").textContent.includes("正在自动完成")); stream.close(); await pending;
+  assert.equal(h.get("result").hidden, true); assert.equal(h.get("error").hidden, false);
+  assert.equal(stream.stats.cancelled, 1); assert.equal(stream.stats.released, 1); assert.equal(h.calls.length, 2);
+});
+
+test("SSE rejects duplicate terminals, events after terminal, unknown events, bad JSON and truncated frames without retry", async () => {
+  const cases = [
+    frame("result", result()) + frame("result", result()),
+    frame("result", result()) + progress("answer", "completed"),
+    frame("unknown", { detail: "not accepted" }),
+    "event: progress\ndata: not-json-secret-marker\n\n",
+    frame("progress", { schema_version: "wrong/v1", stage: "answer", status: "started" }),
+    progress("execute_shell"),
+    "event: result\ndata: " + JSON.stringify(result()),
+    "x".repeat(256 * 1024 + 1),
+    frame("error", { detail: "回答或引用校验未完成，不自动重试。" }),
+  ];
+  for (const content of cases) {
+    const stream = syntheticStream([content]); const h = await ready({ initial: streamPlan(conversationPlan()), streams: [stream] });
+    h.eval(`renderAnswer(${JSON.stringify(result())})`); await h.submit();
+    assert.equal(h.get("result").hidden, true); assert.equal(h.get("claims").textContent, "");
+    assert.equal(h.eval("state.turn"), 0); assert.equal(h.get("error").hidden, false);
+    assert(!h.get("error").textContent.includes("not-json-secret-marker"));
+    assert(h.get("error").textContent.includes("断线不代表服务端已停止"));
+    assert.equal(h.calls.length, 2); assert.equal(stream.stats.cancelled, 1); assert.equal(stream.stats.released, 1);
+  }
+});
+
+test("SSE invalid final answers and transport failures cannot update conversation history", async () => {
+  const invalid = conversationResult(1); invalid.answer.claims[0].evidence[0].quote_id = "Q999";
+  const failedStreams = [syntheticStream([frame("result", invalid)]), syntheticStream([], { failure: "synthetic disconnection" })];
+  for (const stream of failedStreams) {
+    const h = await ready({ initial: streamPlan(conversationPlan()), streams: [stream] }); await h.submit();
+    assert.equal(h.get("result").hidden, true); assert.equal(h.eval("state.turn"), 0); assert.equal(h.eval("state.conversationId"), null);
+    assert.equal(h.get("error").hidden, false); assert.equal(h.calls.length, 2); assert.equal(stream.stats.released, 1);
+    assert.equal(stream.stats.cancelled, 1);
+  }
+});
+
+test("SSE follow-up preserves context, agent budgets and explicit new-conversation reset", async () => {
+  const streams = [syntheticStream([progress("plan"), frame("result", conversationResult(1, agentResult(2)))]),
+    syntheticStream([progress("contextualize"), progress("contextualize", "completed"), frame("result", conversationResult(2, agentResult(2)))])];
+  const h = await ready({ initial: streamPlan(conversationPlan()), streams }); h.get("agent-mode").checked = true;
+  await h.submit(); await h.submit(); assert.equal(h.get("result").hidden, false); assert.equal(h.eval("state.turn"), 2);
+  assert.equal(h.get("history-list").children.length, 1); assert(h.get("run-summary").textContent.includes("聊天 4"));
+  assert.equal(JSON.parse(h.calls[2].options.body).conversation_id, CONVERSATION_ID); await h.reset();
+  assert.equal(h.calls[3].url, "/api/qa/conversation/reset"); assert.equal(h.eval("state.turn"), 0);
+});
+
+test("stream guard failures stay JSON HTTP errors and never open a stream or retry", async () => {
+  const h = await ready({ initial: streamPlan(conversationPlan()), responseStatuses: [410] });
+  await h.submit(); assert.equal(h.calls.length, 2); assert.equal(h.get("result").hidden, true);
+  assert(h.get("error").textContent.includes("新对话")); assert.equal(h.get("ask").disabled, true);
 });

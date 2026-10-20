@@ -201,8 +201,7 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
         except (ValueError, UnicodeError, ValidationError):
             raise HTTPException(422, error_message) from None
 
-    @app.post("/api/qa")
-    async def qa(request: Request):
+    async def validate_qa(request: Request) -> QARequest:
         payload = await read_payload(
             request, QARequest, "请检查问题、模型、确认标记、模式及可选会话参数；问题须为1～2000字符。",
         )
@@ -215,56 +214,91 @@ def create_app(index_dir: Path = DEFAULT_INDEX) -> FastAPI:
 
             if payload.model not in ENABLED_MODELS:
                 raise HTTPException(422, "多步检索暂仅支持已验证原生工具协议的qwen3.8-flash，未请求模型。")
+        return payload
+
+    def read_history(payload: QARequest) -> list:
+        if payload.conversation_id is None:
+            return []
+        try:
+            return conversations.get(payload.conversation_id)
+        except KeyError:
+            raise HTTPException(410, "会话已失效或服务已重启，请点击“新对话”；本次未请求模型。") from None
+
+    def qa_work(payload: QARequest, history: list) -> dict:
+        from qa_platform.workflows.conversation import contextualize
+        from qa_platform.workflows.progress import check_cancelled, report
+
+        if payload.mode == "agent":
+            from qa_platform.workflows.agent_rag import run
+        else:
+            from qa_platform.workflows.live_rag import run
+        check_cancelled()
+        started = perf_counter()
+        query = payload.query.strip()
+        effective_query = query
+        if history:
+            report("contextualize", "started")
+            effective_query = contextualize(query, history, payload.model)
+            report("contextualize", "completed")
+        # 每轮重新检索；历史仅解析指代，不当作本轮回答的事实证据。
+        result = run(effective_query, payload.model, index_dir)
+        check_cancelled()
+        if payload.conversation:
+            if result["query"] != effective_query or result["model"] != payload.model:
+                raise ValueError("本轮结果与会话请求不一致")
+            result = deepcopy(result)
+            if history:
+                result["request_counts"]["chat"] += 1
+                result["request_counts"]["http"] += 1
+                result["steps"] = ["contextualize", *result["steps"]]
+                result["elapsed_seconds"] = round(perf_counter() - started, 3)
+            result["query"] = query
+            check_cancelled()
+            result["conversation"] = conversations.commit(payload.conversation_id, query, effective_query, result)
+        return result
+
+    def qa_error(exc: Exception) -> str:
+        from qa_platform.workflows.conversation import ContextError
+        from qa_platform.workflows.agent_rag import AgentRunError
+        from qa_platform.workflows.live_rag import RAGRunError
+
+        if isinstance(exc, (RAGRunError, AgentRunError, ContextError)):
+            return str(exc)
+        print(f"[自动问答未完成] {type(exc).__name__}；不自动重试。", flush=True)
+        return ("自动问答未完成，请检查索引、LangGraph依赖及模型服务。未展示未经校验的回答；"
+                "请求可能已经发生并产生费用，不自动重试。")
+
+    @app.post("/api/qa")
+    async def qa(request: Request):
+        payload = await validate_qa(request)
         if not busy.acquire(blocking=False):
             raise HTTPException(409, "已有操作正在执行；本次提问尚未开始，请等待后主动提交。")
         try:
-            if payload.mode == "agent":
-                from qa_platform.workflows.agent_rag import run
-            else:
-                from qa_platform.workflows.live_rag import run
-
-            from qa_platform.workflows.conversation import contextualize
-
-            started = perf_counter()
-            query = payload.query.strip()
-            effective_query = query
-            history = []
-            if payload.conversation_id is not None:
-                try:
-                    history = conversations.get(payload.conversation_id)
-                except KeyError:
-                    raise HTTPException(410, "会话已失效或服务已重启，请点击“新对话”；本次未请求模型。") from None
-                effective_query = await run_in_threadpool(contextualize, query, history, payload.model)
-            # 每轮重新检索；历史仅解析指代，不当作本轮回答的事实证据。
-            result = await run_in_threadpool(run, effective_query, payload.model, index_dir)
-            if payload.conversation:
-                if result["query"] != effective_query or result["model"] != payload.model:
-                    raise ValueError("本轮结果与会话请求不一致")
-                result = deepcopy(result)
-                if history:
-                    result["request_counts"]["chat"] += 1
-                    result["request_counts"]["http"] += 1
-                    result["steps"] = ["contextualize", *result["steps"]]
-                    result["elapsed_seconds"] = round(perf_counter() - started, 3)
-                result["query"] = query
-                result["conversation"] = conversations.commit(payload.conversation_id, query, effective_query, result)
-            return result
+            return await run_in_threadpool(qa_work, payload, read_history(payload))
         except HTTPException:
             raise
         except Exception as exc:
-            from qa_platform.workflows.conversation import ContextError
-            from qa_platform.workflows.agent_rag import AgentRunError
-            from qa_platform.workflows.live_rag import RAGRunError
-
-            if isinstance(exc, (RAGRunError, AgentRunError, ContextError)):
-                raise HTTPException(503, str(exc)) from None
-            print(f"[自动问答未完成] {type(exc).__name__}；不自动重试。", flush=True)
-            raise HTTPException(
-                503, "自动问答未完成，请检查索引、LangGraph依赖及模型服务。未展示未经校验的回答；"
-                "请求可能已经发生并产生费用，不自动重试。",
-            ) from None
+            raise HTTPException(503, qa_error(exc)) from None
         finally:
             busy.release()
+
+    @app.post("/api/qa/stream")
+    async def qa_stream(request: Request):
+        from qa_platform.web_stream import stream_response
+
+        payload = await validate_qa(request)
+        if not busy.acquire(blocking=False):
+            raise HTTPException(409, "已有操作正在执行；本次提问尚未开始，请等待后主动提交。")
+        try:
+            history = read_history(payload)  # 过期会话在发送200流头或任何模型请求前返回410。
+        except Exception:
+            busy.release()
+            raise
+        # 此后锁交给工作线程；HTTP断开也须等在途同步请求结束再释放。
+        try:
+            return stream_response(lambda: qa_work(payload, history), busy.release, qa_error)
+        except Exception as exc:  # 桥接器负责构造失败时放锁；此处只返回脱敏HTTP错误。
+            raise HTTPException(503, qa_error(exc)) from None
 
     @app.post("/api/qa/conversation/reset")
     async def reset_conversation(request: Request):

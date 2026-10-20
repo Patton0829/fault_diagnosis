@@ -145,6 +145,7 @@ function validatePlan(data) {
     requireValue(["embedding", "reranker", "chat", "http"].every(key => data.agent.max_request_counts[key] === { embedding: 2, reranker: 2, chat: 3, http: 11 }[key]));
   }
   if (data.conversation !== undefined) requireValue(isObject(data.conversation) && data.conversation.max_history_turns === 3 && data.conversation.max_sessions === 16 && data.conversation.extra_chat_requests === 1 && typeof data.conversation.notice === "string");
+  if (data.stream !== undefined) requireValue(isObject(data.stream) && data.stream.url === "/api/qa/stream" && data.stream.protocol === "qa-progress/v1" && data.stream.heartbeat_seconds === 10);
   return data;
 }
 function agentSupported() {
@@ -348,6 +349,61 @@ async function newConversation() {
     el("error").hidden = false;
   } finally { state.busy = false; updateControls(); }
 }
+async function readProgressStream(response, validateResult) {
+  requireValue(response.headers?.get("content-type")?.split(";")[0].trim() === "text/event-stream" && response.body && typeof response.body.getReader === "function");
+  const labels = { contextualize: "理解追问", plan: "规划检索", search: "检索与重排", retrieve: "混合检索", rerank: "重排", answer: "生成与校验回答" };
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let buffer = "", terminal = null, answer = null, lastCompleted = null, complete = false;
+  function eventBlock(block) {
+    let event = null; const lines = [];
+    for (const line of block.split(/\r?\n/)) {
+      if (!line || line.startsWith(":")) continue;
+      const colon = line.indexOf(":");
+      requireValue(colon > 0);
+      const field = line.slice(0, colon), value = line.slice(colon + 1).replace(/^ /, "");
+      if (field === "event") { requireValue(event === null); event = value; }
+      else if (field === "data") lines.push(value);
+      else requireValue(false);
+    }
+    if (event === null && lines.length === 0) return; // 心跳只维持连接，不冒充执行进度。
+    requireValue(terminal === null && ["progress", "result", "error"].includes(event) && lines.length > 0);
+    let data;
+    try { data = JSON.parse(lines.join("\n")); }
+    catch (_) { throw new Error("进度数据格式无效，未展示未经校验的回答。"); }
+    if (event === "progress") {
+      requireValue(isObject(data) && data.schema_version === "qa-progress/v1" && Object.hasOwn(labels, data.stage) && ["started", "completed"].includes(data.status));
+      if (data.status === "completed") {
+        lastCompleted = labels[data.stage];
+        el("status").textContent = "已完成：" + lastCompleted + "，正在继续……";
+      } else el("status").textContent = labels[data.stage] + "中…" + (lastCompleted ? " · 最近完成：" + lastCompleted : "");
+    } else if (event === "result") {
+      terminal = "result"; answer = data;
+    } else {
+      requireValue(isObject(data) && typeof data.detail === "string" && data.detail.trim() && data.detail.length <= 2000);
+      throw new Error(data.detail);
+    }
+  }
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      requireValue(buffer.length <= 256 * 1024);
+      let match;
+      while ((match = /\r?\n\r?\n/.exec(buffer)) !== null) {
+        eventBlock(buffer.slice(0, match.index)); buffer = buffer.slice(match.index + match[0].length);
+      }
+      if (done) break;
+    }
+    requireValue(buffer.trim() === "" && terminal === "result");
+    const validated = validateResult(answer);
+    complete = true;
+    return validated;
+  } finally {
+    if (!complete) { try { await reader.cancel(); } catch (_) { /* 断线不代表后端已停止或没有费用。 */ } }
+    reader.releaseLock();
+  }
+}
 async function submitQuestion(event) {
   event.preventDefault();
   if (state.busy || !state.plan || state.sessionLost) return;
@@ -364,7 +420,7 @@ async function submitQuestion(event) {
   el("status").textContent = agentMode ? "正在按需执行最多2次工具检索并回答，请稍候……" : "正在自动完成检索、重排和回答，请稍候……";
   updateControls();
   try {
-    const response = await fetch("/api/qa", {
+    const response = await fetch(state.plan.stream ? state.plan.stream.url : "/api/qa", {
       method: "POST", mode: "same-origin", credentials: "same-origin", cache: "no-store",
       headers: { "Content-Type": "application/json", "X-Retrieval-Lab": "1" },
       body: JSON.stringify({ query, model, confirmed: true, ...(agentMode ? { mode: "agent" } : {}), ...(conversation ? { conversation: true, ...(conversation.id ? { conversation_id: conversation.id } : {}) } : {}) })
@@ -377,12 +433,13 @@ async function submitQuestion(event) {
       }
       throw new Error(message);
     }
-    const answer = validateAnswer(await response.json(), query, model, agentMode, conversation);
+    const validateResult = data => validateAnswer(data, query, model, agentMode, conversation);
+    const answer = state.plan.stream ? await readProgressStream(response, validateResult) : validateResult(await response.json());
     renderAnswer(answer); saveTurn(answer);
     el("status").textContent = "本次执行结束；回答仍需结合实际集群核验。";
   } catch (error) {
-    showError((error instanceof Error ? error.message : "本次问答未完成。") + " 未展示未完成的回答；模型请求可能已发生并产生费用，不自动重试。");
-    el("status").textContent = state.sessionLost ? "对话已失效，请点击“新对话”；不会自动重试。" : "执行未完成。再次点击提问将发起新请求。";
+    showError((error instanceof Error ? error.message : "本次问答未完成。") + " 未展示未完成的回答；模型请求可能已发生并产生费用。断线不代表服务端已停止，请等待后再主动提问；不自动重试或重连。");
+    el("status").textContent = state.sessionLost ? "对话已失效，请点击“新对话”；不会自动重试。" : "执行未完成，请等待后再主动提问；新请求可能再次产生费用。";
   } finally { state.busy = false; updateControls(); }
 }
 el("question-form").addEventListener("submit", submitQuestion);

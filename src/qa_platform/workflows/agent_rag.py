@@ -16,6 +16,7 @@ from qa_platform.rag import kubernetes_answer as answering
 from qa_platform.rag.answering import GroundedAnswer
 from qa_platform.retrieval import knowledge_tool as knowledge
 from qa_platform.workflows.live_rag import _public_result
+from qa_platform.workflows.progress import RunCancelled, report
 
 
 ENABLED_MODELS = ("qwen3.8-flash",)  # 目前只有此服务完成了真实原生工具协议验证。
@@ -72,6 +73,7 @@ def build_graph(index_dir: Path, client):
     from langgraph.graph import END, START, StateGraph
 
     def plan(state: AgentState) -> dict:
+        report("plan", "started")
         if state["planner_calls"] >= MAX_TOOL_CALLS or len(state["rounds"]) >= MAX_TOOL_CALLS:
             raise ValueError("不允许超出决策预算")
         response = client.chat.completions.create(
@@ -88,6 +90,7 @@ def build_graph(index_dir: Path, client):
                   "counts": _add_counts(state["counts"], {"embedding": 0, "reranker": 0, "chat": 1, "http": 1})}
         if choice.finish_reason == "stop" and not message.tool_calls:
             # 不展示决策模型的未校验文字，更不把JSON动作当作原生tool_calls。
+            report("plan", "completed")
             return {**update, "pending_call": None, "stop_reason": "model_finished"}
         calls = message.tool_calls
         if choice.finish_reason != "tool_calls" or not calls or len(calls) != 1:
@@ -109,17 +112,19 @@ def build_graph(index_dir: Path, client):
         safe_call = {"id": call.id, "type": "function", "function": {
             "name": knowledge.TOOL_NAME, "arguments": json.dumps(args.model_dump(), ensure_ascii=False),
         }}
+        report("plan", "completed")
         return {**update, "pending_call": {"id": call.id, "query": args.query},
                 "messages": [*state["messages"], {"role": "assistant", "content": None, "tool_calls": [safe_call]}]}
 
     def search(state: AgentState) -> dict:
+        report("search", "started")
         if len(state["rounds"]) >= MAX_TOOL_CALLS or state["pending_call"] is None:
             raise ValueError("工具预算耗尽或没有合法调用")
         call = state["pending_call"]
         found = knowledge.search_knowledge(index_dir, call["query"], expected_contract=state["contract"])
         reply = knowledge.tool_reply(found)
         rounds = [*state["rounds"], found]
-        return {
+        update = {
             "rounds": rounds, "contract": found["contract"], "pending_call": None,
             "counts": _add_counts(state["counts"], found["result"]["request_counts"]),
             "tool_calls": [*state["tool_calls"], {"id": call["id"], "name": knowledge.TOOL_NAME,
@@ -128,8 +133,11 @@ def build_graph(index_dir: Path, client):
                 "content": json.dumps(reply, ensure_ascii=False)}],
             "stop_reason": "tool_budget_reached" if len(rounds) == MAX_TOOL_CALLS else "model_finished",
         }
+        report("search", "completed")
+        return update
 
     def answer(state: AgentState) -> dict:
+        report("answer", "started")
         sources = knowledge.merge_sources(state["rounds"]) if state["rounds"] else {}
         counts = dict(state["counts"])
         if sources:
@@ -142,6 +150,7 @@ def build_graph(index_dir: Path, client):
         result = _public_result({"query": state["query"], "request_counts": counts,
             "answer_generation": {"model": state["model"], "answer": grounded.model_dump(),
                 "sources": knowledge.evidence_payload(sources)}}, state["model"])
+        report("answer", "completed")
         return {"result": result, "counts": counts}
 
     def after_plan(state: AgentState) -> Literal["search", "answer"]:
@@ -204,6 +213,8 @@ def run(query: str, model: str, index_dir: Path, *, client_factory=None,
                         raise ValueError("图未完整结束")
                     if any(values["counts"][key] > limit for key, limit in MAX_REQUEST_COUNTS.items()):
                         raise ValueError("实际请求计数超出预算")
+    except RunCancelled:
+        raise
     except Exception:
         raise AgentRunError(stage, steps) from None
     return {"schema_version": "rag-live/v1", **values["result"], "mode": "agent", "steps": steps,
