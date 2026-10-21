@@ -60,7 +60,8 @@
 
   <form id="question-form">
     <label for="query">你想排查什么问题？</label>
-    <textarea id="query" rows="3" maxlength="2000" required disabled placeholder="例如：Pod 里访问服务域名时 DNS 解析失败，应该如何排查？"></textarea>
+    <textarea id="query" rows="3" maxlength="2000" required disabled aria-describedby="query-hint" placeholder="例如：Pod 里访问服务域名时 DNS 解析失败，应该如何排查？"></textarea>
+    <p id="query-hint" class="note">问题框为空时按 Tab 填入示例；再次按 Tab 切换焦点。</p>
     <div class="controls">
       <div class="model"><label for="model">回答模型</label><select id="model" disabled></select></div>
       <button id="ask" type="submit" disabled>提问</button>
@@ -493,6 +494,16 @@ async function readProgressStream(response, validateResult) {
     reader.releaseLock();
   }
 }
+function fillQueryExample(event) {
+  const query = el("query");
+  if (event.key !== "Tab" || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing
+      || state.busy || !state.plan || query.disabled || query.readOnly || query.value.trim()) return;
+  const example = query.placeholder.replace(/^例如[：:]\s*/, "").trim();
+  if (!example) return;
+  event.preventDefault();
+  query.value = example;
+  query.setSelectionRange(example.length, example.length);
+}
 async function submitQuestion(event) {
   event.preventDefault();
   if (state.busy || !state.plan || state.sessionLost) return;
@@ -532,6 +543,7 @@ async function submitQuestion(event) {
   } finally { state.busy = false; updateControls(); }
 }
 el("question-form").addEventListener("submit", submitQuestion);
+el("query").addEventListener("keydown", fillQueryExample);
 el("model").addEventListener("change", showDestinations);
 el("agent-mode").addEventListener("change", showAgentNotice);
 el("new-conversation").addEventListener("click", newConversation);
