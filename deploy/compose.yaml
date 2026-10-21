@@ -1,0 +1,85 @@
+# Only infrastructure runs in containers; the application keeps using the host Conda environment.
+# This isolated project never attaches to the existing native MySQL/Redis data directories.
+name: fault-diagnosis-learning
+
+services:
+  mysql:
+    image: mysql:9.7.2
+    restart: "no"
+    ports:
+      - "127.0.0.1:13306:3306"
+    environment:
+      MYSQL_DATABASE: fault_diagnosis
+      MYSQL_USER: fault_qa
+      MYSQL_ROOT_HOST: localhost
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_app_password
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    secrets:
+      - mysql_root_password
+      - mysql_app_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - type: bind
+        source: ./mysql-init.sql
+        target: /docker-entrypoint-initdb.d/01-qa-schema.sql
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      # Validate the runtime account and every required column, without reading any stored answers.
+      test:
+        - CMD-SHELL
+        - >-
+          MYSQL_PWD="$$(cat /run/secrets/mysql_app_password)"
+          mysql --protocol=tcp --host=127.0.0.1 --port=3306 --user=fault_qa
+          --database=fault_diagnosis --batch --skip-column-names
+          --execute="SELECT id, created_at, last_turn, active FROM qa_conversations LIMIT 0;
+          SELECT conversation_id, turn_no, query, effective_query, model, summary, result, created_at FROM qa_turns LIMIT 0;"
+          >/dev/null 2>&1
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 60s
+
+  redis:
+    image: redis:8.10.2-alpine
+    restart: "no"
+    ports:
+      - "127.0.0.1:16379:6379"
+    # Open the 0600 config as root, then let the official entrypoint drop to the redis user.
+    # Redis accepts '-' for stdin configuration; no password appears in arguments or Compose env.
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - exec /usr/local/bin/docker-entrypoint.sh redis-server - < /run/secrets/redis_config
+    secrets:
+      - redis_config
+      - redis_password
+    # No persistent volume: .local/redis.conf disables RDB/AOF and uses 64 MB/allkeys-lru.
+    tmpfs:
+      - /data:rw,noexec,nosuid,size=16m
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          test "$$(REDISCLI_AUTH="$$(cat /run/secrets/redis_password)"
+          redis-cli -h 127.0.0.1 -p 6379 --no-auth-warning ping 2>/dev/null)" = PONG
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  mysql_data:
+
+secrets:
+  mysql_root_password:
+    file: ./.local/mysql_root_password
+  mysql_app_password:
+    file: ./.local/mysql_app_password
+  redis_password:
+    file: ./.local/redis_password
+  redis_config:
+    file: ./.local/redis.conf

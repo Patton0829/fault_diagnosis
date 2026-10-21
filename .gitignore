@@ -44,3 +44,6 @@ __pycache__/
 /models/*
 !/models/.env.example
 !/models/database.env.example
+
+# Compose学习环境的独立本机凭据与含密码配置。
+/deploy/.local/

@@ -15,7 +15,7 @@
 | ① 文档处理与检索 | 已有清洗、切块、Embedding、Milvus和混合检索；多格式解析、跨版本增量更新及正式评测仍待补 |
 | ② 单轮RAG | 已有真实检索、重排、结构化回答、来源引用、拒答及简单页面 |
 | ③ LangGraph辅助诊断 | 最小主流程已有真实单轮图、原生工具循环及最近3轮短期追问；更多诊断工具、澄清策略与持久记忆仍待补 |
-| ④ 平台工程、部署与评测 | 当前推进：FastAPI、SSE、MySQL两轮保存与刷新恢复已验收；Redis检索缓存已接入并通过合成读写，真实问答命中对照待用户验证；vLLM、Docker Compose及系统化质量评测仍待补 |
+| ④ 平台工程、部署与评测 | 当前推进：FastAPI、SSE、MySQL两轮保存与刷新恢复已验收；Redis检索缓存已接入并通过合成读写，真实问答命中对照待用户验证；已有独立MySQL/Redis的Compose基础服务方案，应用仍在Conda；完整应用镜像、vLLM及系统化质量评测仍待补 |
 
 保持简单页面，逐步补齐核心能力；教学分支/审批回放不能当作真实Agent已经完成。当前使用Kubernetes文档复现技术路线，不把它表述为真实铁路故障知识或已部署的现场诊断系统。
 
@@ -37,8 +37,10 @@ fault_diagnosis/
 │       ├── workflows/             # live_rag.py单轮；agent_rag.py工具循环；其余为合成教学
 │       ├── web_app.py             # 文档处理可视化的后端
 │       ├── web_stream.py          # 工作线程→SSE进度桥接，不转发模型Token
+│       ├── deployment.py          # 独立Compose学习环境的准备、检查和应用入口
 │       └── retrieval_lab.py       # 独立检索学习台，不改变原清洗台的零模型约定
 ├── scripts/                      # 运行入口，不承载业务实现
+├── deploy/                       # Compose、初始化SQL；.local为不提交的独立凭据
 ├── tests/                        # 目录/语料兼容、缓存与入库的离线测试
 ├── docs/
 │   ├── learning/                 # 本机学习笔记，暂不上传
@@ -321,6 +323,69 @@ START → plan ──提出合法工具调用──→ search
 核心文件：`storage/retrieval_cache.py`定义缓存Key/Value、TTL和验证；`workflows/live_rag.py`在检索节点读缓存，命中时重排节点复用结果，回答节点始终执行；`rag/kubernetes_answer.py`区分真实重排与复用；`storage/sql_conversations.py`持久化公开缓存状态和本轮实际计数；`retrieval_lab.py`处理开关及启动PING；`web/qa.html`只在原结果末尾显示状态。`tests/test_retrieval_cache.py`使用替身和临时SQLite覆盖这些合同，不是新增运行时内存缓存或SQLite回退。
 
 2026-10-21：全量886项测试通过（4项既有警告），其中新增缓存回归76项，Node前端47项。真实Redis隔离合成Key完成未命中→写入→命中，实测TTL剩余300秒，命中检索计数全0；没有调用模型、写MySQL或把合成排名写入真实问题的缓存键。浏览器在服务重启后恢复了原问答并显示5分钟缓存提示。真实问答的首次未命中/再次命中对照尚待用户执行，不把合成验证包装为成本或质量实测。
+
+### Docker Compose第一步：隔离的MySQL与Redis
+
+这一步解决“基础服务如何统一启动”，**不是整个RAG应用已容器化**。现有Milvus冻结索引包含本机绝对路径和源码指纹，不能直接复制到Linux容器后绕过校验。因此应用、Milvus仍使用当前Conda与本机知识库；Compose只管理两个新的基础服务，不迁移或覆盖原数据库。
+
+| 环境 | 应用 | MySQL | Redis | 历史记录 |
+| --- | --- | --- | --- | --- |
+| 现有本机环境 | `8766` | `3306` | `6379` | 保持原样 |
+| Compose学习环境 | `8767`（仍在Conda） | `13306`→容器`3306` | `16379`→容器`6379` | 新库初始为空，与原库隔离 |
+
+端口只发布到`127.0.0.1`。两个环境虽然数据库不同，但仍使用同一Milvus Lite目录，**不要同时启动两个问答应用**；`--serve`发现8766或8767被占用会拒绝，不会自动结束原进程。这只是本机已知端口的保护，不是跨主机生产锁。
+
+先打开Docker Desktop；在项目根目录依次运行：
+
+```bash
+# 默认只看计划：不读取配置、不写文件、不运行Docker或连接服务
+python -B scripts/serve_compose.py
+
+# 仅第一次：生成独立密码文件，不读取本机MySQL root密码
+python -B scripts/serve_compose.py --prepare
+
+# 下载镜像、创建容器与新数据卷，等待服务健康；不启动问答应用
+python -B scripts/serve_compose.py --up
+
+# 只读检查两张表、记录数量与Redis PING；不调用模型
+python -B scripts/serve_compose.py --check
+```
+
+要切换体验时，先在原终端按Ctrl+C正常停止8766应用，再运行：
+
+```bash
+/Users/patton/miniconda3/envs/langchain/bin/python -B scripts/serve_compose.py --serve
+```
+
+打开`http://127.0.0.1:8767/qa`。页面在原有存储提示中标明“Docker MySQL（13306，与本机3306记录隔离）”，没有新增管理面板。此时提问才会调用既有模型；模型地址、费用、外发范围与RAG流程不变。新端口是不同浏览器来源，不会自动带入8766的会话ID；旧历史仍在原数据库。
+
+停止新应用后，可关闭这组基础容器：
+
+```bash
+python -B scripts/serve_compose.py --down
+```
+
+`--down`保留MySQL命名卷及凭据，再次`--up`复用旧数据；Redis禁用RDB/AOF，重建容器后缓存为空。**不要运行`docker compose down -v`**：它会删除这组MySQL卷。初始化SQL只在新空数据卷首次启动时运行，不是每次启动都建表或自动迁移。MySQL初始化机制见[官方镜像说明](https://hub.docker.com/_/mysql)，健康检查等待参考[Compose启动顺序文档](https://docs.docker.com/compose/how-tos/startup-order/)。
+
+安全与边界：
+
+- 固定官方镜像`mysql:9.7.2`、`redis:8.10.2-alpine`，不使用`latest`；标签未固定到digest，不是严格可复现构建。没有安装或替换本机MySQL/Redis二进制。
+- `deploy/.local/`目录0700、文件0600，生成三个独立随机密码。它已被Git忽略；不把密码打印到终端、放入命令参数或提交仓库。已有目录包括部分失败配置均不覆盖。不要分享这些文件或随意重生成，否则已有MySQL卷的密码不会跟着变化。
+- Compose使用本机文件secret挂载；它不是外部密钥保险库或磁盘加密。MySQL root只允许容器内本机连接，应用账号仅有项目库CRUD权限；Redis有独立密码和64MiB淘汰上限。其他拥有Docker控制权的本机用户仍可能访问数据，不是多租户安全部署。
+- 容器只挂载新命名卷和初始化SQL，不挂载`models/`、知识库、本机MySQL数据目录或Docker socket；应用由辅助入口注入13306/16379连接，不读取旧`models/database.env`，失败不回退本机原服务。
+- `--up`不调用模型、不开新问答进程；失败保留已有容器/卷供排查，不自动重试、删卷或重置密码。辅助入口隐藏原始命令输出以避免泄露配置，镜像下载失败需检查Docker及网络，不自动修改镜像源或降低TLS校验。
+
+核心源码按顺序阅读：
+
+1. `deploy/compose.yaml`：声明MySQL、Redis镜像、端口、secret、健康检查及数据卷。Compose是服务配置，不是业务代码。
+2. `deploy/mysql-init.sql`：仅为空卷首次创建两张现有ORM表，再把应用账号权限收紧到CRUD；表结构和已有问答存储逻辑相同。
+3. `src/qa_platform/deployment.py`：`prepare`生成独立配置，`compose`管理固定项目，`open_services/check`验证连接，`serve`将两个容器连接注入原FastAPI应用。没有复制RAG、改变模型调用或自动迁移原记录。
+4. `scripts/serve_compose.py`只是兼容运行入口；原`mysql_setup.py`与`retrieval_cache.py`只增加显式隔离端口支持，默认3306/6379不变；`retrieval_lab.py`与`web/qa.html`只增加简短环境标识。
+5. `tests/test_compose_deployment.py`包含60项离线合同与安全测试；不以替身测试冒充真实镜像启动验收。
+
+2026-10-21实际验收：启动Docker Desktop，下载并运行上述两个Linux/arm64镜像，健康检查均通过；容器应用账号只读核验两表及CRUD权限，Redis认证PING通过，新库记录0/0。执行一次`--down`再`--up`，复用同一MySQL卷后表仍可读，未写测试问答，也未删除数据卷。首次健康验收发现`redis-cli`不支持`--host/--port`，已改为`-h/-p`并补回归断言，之后重新验收通过。8766原应用及6379原Redis保持运行，未启动8767、未调用任何模型；因此本次不是新环境完整问答或浏览器验收。全量946项测试通过（4项既有警告），Node前端49项通过。
+
+后续完整应用镜像需要先实现可迁移的知识库/索引合同，再验证Linux及相应架构下的依赖、Milvus数据读回和完整问答；本步没有通过改写旧清单或关闭校验来跳过这些工作。
 
 ### 查看本地编码计划
 

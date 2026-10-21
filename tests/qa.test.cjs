@@ -597,6 +597,28 @@ test("only an explicitly consistent persistent plan permits unbounded database-s
   }
 });
 
+test("optional database location distinguishes Docker storage using literal text without extra requests", async () => {
+  for (const location of ["Docker MySQL（13306，与本机3306记录隔离）", "Docker <img src=x onerror=alert(1)>"]) {
+    const initial = mysqlPlan(); initial.storage.location = location;
+    const h = await ready({ initial });
+    assert(h.get("storage-notice").textContent.includes("问答保存在" + location));
+    assert(!h.get("storage-notice").textContent.includes("保存在本机 MySQL"));
+    assert.equal(h.get("storage-notice").querySelectorAll("img").length, 0);
+    assert.equal(h.get("ask").disabled, false); assert.equal(h.calls.length, 1);
+  }
+  const legacy = await ready({ initial: mysqlPlan() });
+  assert(legacy.get("storage-notice").textContent.includes("保存在本机 MySQL"));
+});
+
+test("malformed optional storage locations are rejected before restoring or requesting a model", async () => {
+  for (const location of ["", " \n\t", "x".repeat(161), null, 13306, {}]) {
+    const initial = mysqlPlan(); initial.storage.location = location;
+    const h = await ready({ initial, storedId: CONVERSATION_ID }); await h.submit();
+    assert.equal(h.get("ask").disabled, true); assert.equal(h.get("result").hidden, true);
+    assert.equal(h.calls.length, 1); assert.equal(h.storageCalls.length, 0);
+  }
+});
+
 test("optional exact-cache plan adds a compact disclosure without new controls or requests", async () => {
   const h = await ready({ initial: cachePlan(agentPlan()) });
   assert.equal(h.calls.length, 1); assert.equal(h.get("ask").disabled, false);

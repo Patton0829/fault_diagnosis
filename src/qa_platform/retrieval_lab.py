@@ -80,11 +80,13 @@ class ConversationResetRequest(BaseModel):
 
 
 def create_app(index_dir: Path = DEFAULT_INDEX, *, conversation_store=None, storage_backend: str = "memory",
-               retrieval_cache=None, cache_backend: str = "none") -> FastAPI:
+               retrieval_cache=None, cache_backend: str = "none", deployment_mode: bool = False) -> FastAPI:
     if storage_backend not in {"memory", "mysql"} or (storage_backend == "mysql" and conversation_store is None):
         raise ValueError("MySQL模式须显式传入已检查的存储；不隐式初始化或回退内存。")
     if cache_backend not in {"none", "redis"} or (cache_backend == "redis") != (retrieval_cache is not None):
         raise ValueError("Redis模式须显式传入缓存；不自动启动服务器或静默回退。")
+    if deployment_mode and (storage_backend != "mysql" or cache_backend != "redis"):
+        raise ValueError("Compose学习环境必须显式使用独立MySQL和Redis。")
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
     busy = Lock()
@@ -147,6 +149,9 @@ def create_app(index_dir: Path = DEFAULT_INDEX, *, conversation_store=None, stor
                       "数据库故障会报错，不静默回退内存；不是用户登录或生产权限隔离。")
             plan["storage"] = {"backend": "mysql", "persistent": True, "notice": notice}
             plan["conversation"] = {**plan["conversation"], "max_sessions": None, "notice": notice}
+        if deployment_mode:
+            plan["storage"]["location"] = "Docker MySQL（13306，与本机3306记录隔离）"
+            plan["cache"]["notice"] += "当前连接独立Docker Redis 16379，不共用本机6379缓存。"
         return plan
 
     @app.get("/assets/retrieval_export.js")

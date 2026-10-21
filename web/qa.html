@@ -147,6 +147,7 @@ function validatePlan(data) {
     requireValue(["embedding", "reranker", "chat", "http"].every(key => data.agent.max_request_counts[key] === { embedding: 2, reranker: 2, chat: 3, http: 11 }[key]));
   }
   if (data.storage !== undefined) requireValue(isObject(data.storage) && ["memory", "mysql"].includes(data.storage.backend) && typeof data.storage.persistent === "boolean" && data.storage.persistent === (data.storage.backend === "mysql") && typeof data.storage.notice === "string");
+  if (data.storage?.location !== undefined) requireValue(typeof data.storage.location === "string" && data.storage.location.trim().length > 0 && data.storage.location.length <= 160);
   if (data.cache !== undefined) requireValue(isObject(data.cache) && ["none", "redis"].includes(data.cache.backend) && typeof data.cache.enabled === "boolean" && data.cache.enabled === (data.cache.backend === "redis") && data.cache.ttl_seconds === 300 && typeof data.cache.notice === "string");
   if (data.conversation !== undefined) requireValue(isObject(data.conversation) && data.conversation.max_history_turns === 3 && data.conversation.max_sessions === (data.storage?.persistent ? null : 16) && data.conversation.extra_chat_requests === 1 && typeof data.conversation.notice === "string");
   if (data.stream !== undefined) requireValue(isObject(data.stream) && data.stream.url === "/api/qa/stream" && data.stream.protocol === "qa-progress/v1" && data.stream.heartbeat_seconds === 10);
@@ -179,7 +180,8 @@ function showConversationNotice() {
 function persistentStorage() { return state.plan?.storage?.backend === "mysql" && state.plan.storage.persistent === true; }
 function showStorageNotice() {
   el("storage-notice").hidden = !state.plan?.storage && !state.storageWarning;
-  el("storage-notice").textContent = (persistentStorage() ? "问答保存在本机 MySQL；同一标签刷新可恢复最近会话，浏览器仅保存会话ID，不保存正文或密钥。" : "使用服务内存会话，不自动迁移到数据库。") + (state.storageWarning ? " " + state.storageWarning : "");
+  const location = state.plan?.storage?.location || "本机 MySQL";
+  el("storage-notice").textContent = (persistentStorage() ? "问答保存在" + location + "；同一标签刷新可恢复最近会话，浏览器仅保存会话ID，不保存正文或密钥。" : "使用服务内存会话，不自动迁移到数据库。") + (state.storageWarning ? " " + state.storageWarning : "");
   el("storage-footer").textContent = persistentStorage() ? "问答保存到本机数据库；同一标签刷新可恢复。追问仍只使用最近3轮摘要理解上下文，不把历史当作证据。" : "对话仅短期保存在服务内存；刷新页面不恢复，不作长期记忆。";
 }
 function saveConversationId(clear = false) {

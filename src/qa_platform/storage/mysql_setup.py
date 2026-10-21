@@ -24,6 +24,11 @@ class SetupError(RuntimeError):
 @dataclass(frozen=True)
 class DatabaseConfig:
     password: str = field(repr=False)
+    port: int = field(default=3306, kw_only=True)
+
+    def __post_init__(self):
+        if type(self.port) is not int or self.port not in {3306, 13306}:
+            raise SetupError("只允许本机原生3306或显式Compose学习环境13306端口。")
 
 
 def read_config(path: Path = CONFIG_PATH) -> DatabaseConfig:
@@ -51,7 +56,7 @@ def make_engine(config: DatabaseConfig):
 
     return create_engine(
         URL.create("mysql+pymysql", username=APP_USER, password=config.password,
-                   host="127.0.0.1", port=3306, database=DATABASE, query={"charset": "utf8mb4"}),
+                   host="127.0.0.1", port=config.port, database=DATABASE, query={"charset": "utf8mb4"}),
         pool_pre_ping=True, pool_recycle=1800, echo=False, hide_parameters=True,
         connect_args={"connect_timeout": 3, "read_timeout": 5, "write_timeout": 5},
     )

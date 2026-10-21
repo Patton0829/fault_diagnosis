@@ -243,9 +243,17 @@ def _restore(ranking: dict, check: dict) -> dict:
 class RetrievalCache:
     """固定本机 Redis DB0；首次 ping/get/put 才创建 SDK 客户端。"""
 
-    def __init__(self, *, client_factory=None):
+    def __init__(self, *, client_factory=None, port: int = 6379, password: str | None = None):
+        if type(port) is not int or port not in {6379, 16379}:
+            raise CacheError()
+        if (password is not None and (not isinstance(password, str) or not password.strip())) or (
+            port == 16379 and password is None
+        ):
+            raise CacheError()
         self._factory = client_factory
         self._connection = None
+        self._port = port
+        self._password = password
 
     def _client(self):
         if self._connection is None:
@@ -254,13 +262,16 @@ class RetrievalCache:
             from redis.retry import Retry
 
             factory = self._factory or Redis
-            self._connection = factory(
-                host="127.0.0.1", port=6379, db=0,
+            options = dict(
+                host="127.0.0.1", port=self._port, db=0,
                 socket_timeout=1, socket_connect_timeout=1,
                 decode_responses=False, retry=Retry(NoBackoff(), 0),
                 retry_on_timeout=False, retry_on_error=[],
                 health_check_interval=0,
             )
+            if self._password is not None:
+                options["password"] = self._password
+            self._connection = factory(**options)
         return self._connection
 
     def key(self, check: dict) -> str:
