@@ -30,6 +30,9 @@ __pycache__/
 # 本地Embedding编码缓存（SQLite检查点）。
 /data/embedding_cache/
 
+# 可迁移知识包含知识正文与向量，只保存在本地。
+/data/portable_bundles/
+
 # 本地身份、个人材料、运行报告和待核验截图，不进入公开仓库。
 /.vscode/
 /docs/reference/
