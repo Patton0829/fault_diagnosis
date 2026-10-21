@@ -79,14 +79,27 @@ class ConversationResetRequest(BaseModel):
     conversation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
+class KnowledgeSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    index_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
+    document_count: int = Field(ge=1, le=5000)
+    parent_count: int = Field(ge=1, le=5000)
+    dimension: int = Field(ge=2, le=8192)
+    notice: str = Field(min_length=1, max_length=400)
+
+
 def create_app(index_dir: Path = DEFAULT_INDEX, *, conversation_store=None, storage_backend: str = "memory",
-               retrieval_cache=None, cache_backend: str = "none", deployment_mode: bool = False) -> FastAPI:
+               retrieval_cache=None, cache_backend: str = "none", deployment_mode: bool = False,
+               knowledge_summary: dict | None = None) -> FastAPI:
     if storage_backend not in {"memory", "mysql"} or (storage_backend == "mysql" and conversation_store is None):
         raise ValueError("MySQL模式须显式传入已检查的存储；不隐式初始化或回退内存。")
     if cache_backend not in {"none", "redis"} or (cache_backend == "redis") != (retrieval_cache is not None):
         raise ValueError("Redis模式须显式传入缓存；不自动启动服务器或静默回退。")
     if deployment_mode and (storage_backend != "mysql" or cache_backend != "redis"):
         raise ValueError("Compose学习环境必须显式使用独立MySQL和Redis。")
+    knowledge = KnowledgeSummary.model_validate(knowledge_summary).model_dump() if knowledge_summary is not None else None
+    if knowledge is not None and knowledge["parent_count"] > knowledge["document_count"]:
+        raise ValueError("知识库父文档数不能超过块数。")
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
     busy = Lock()
@@ -135,6 +148,8 @@ def create_app(index_dir: Path = DEFAULT_INDEX, *, conversation_store=None, stor
         from qa_platform.workflows.live_rag import describe
 
         plan = describe()  # 不读密钥/索引，不启动图或模型请求。
+        if knowledge is not None:
+            plan["knowledge"] = deepcopy(knowledge)
         if cache_backend == "redis":
             from qa_platform.storage.retrieval_cache import describe as describe_cache
 

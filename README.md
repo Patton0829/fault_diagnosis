@@ -933,3 +933,9 @@ v2 的清单记录了迁移前四份规则源码的完整 SHA256。直接更改�
 ### 已通过候选的本地编码与Milvus入库
 
 2026-10-21按用户要求将上述755篇/1920块保存为新语料，使用内网`qwen3-embedding:8b`实际编码240批、4096维，再复用缓存写入本机Milvus Lite。新索引`data/milvus_indexes/kubernetes_full_preflight_v1/`已`ready`，跨进程全量原文/元数据/向量核对通过，NumPy余弦对照最大差约`1.47e-07`。未纳入739篇待处理资料，未调用云端重排或聊天，旧156/215块索引保留。新增准备入口`scripts/prepare_k8s_full_corpus.py`；147项相关测试通过。当前QA的1000块教学限制仍保留，未切换服务；[命令、成本和验收说明](docs/full_corpus_preflight.md#把已通过的1920块写入本机milvus)。
+
+### 1920块知识库已接入问答
+
+完成上述入库阶段后，查询入口已扩容为最多5000块、128MiB原始float32向量预算，并按128条分页核验。2026-10-21本机`http://127.0.0.1:8767/qa`已显式使用755篇/1920块的新索引，顶部显示当前范围；不改变无参数启动时的旧默认索引。重启需使用`python -B scripts/serve_compose.py --serve --index-dir data/milvus_indexes/kubernetes_full_preflight_v1`，先正常停止旧应用。
+
+真实混合检索验收仅请求1次本地问题编码及2次digest GET，未重编码文档、未请求云端重排或聊天；全套1527项测试通过。原MySQL问答记录、Redis和旧156/215块索引均保留。恢复的旧回答不会自动重检索，新提问才使用当前知识库；范围扩大不等于回答更准。[核心代码、启动和验收边界](docs/full_corpus_preflight.md#将1920块索引接入问答2026-10-21)。

@@ -151,17 +151,28 @@ def require_exclusive_app() -> None:
             raise DeploymentError("8766或8767已有应用；请先手动停止旧应用，避免两个进程共用Milvus Lite。不会自动结束它。") from None
 
 
-def serve(local_dir: Path = LOCAL_DIR) -> None:
+def serve(local_dir: Path = LOCAL_DIR, *, index_dir: Path | None = None) -> None:
     require_exclusive_app()
     from qa_platform.retrieval_lab import create_app
     from qa_platform.storage.sql_conversations import SQLConversationStore
     import uvicorn
 
+    options = {}
+    if index_dir is not None:
+        from qa_platform.storage.kubernetes_search import describe_index
+
+        index_dir = index_dir.expanduser().absolute()
+        try:
+            summary = describe_index(index_dir)  # 先验索引，再打开数据库/Redis凭据。
+        except (OSError, ValueError, KeyError, TypeError):
+            raise DeploymentError("指定知识库未通过离线验收；不启动、不自动建库或回退旧索引。") from None
+        options = {"index_dir": index_dir, "knowledge_summary": summary}
+        print(f"[知识库] {summary['index_name']}；{summary['parent_count']}篇/{summary['document_count']}块；打开页面0模型请求。")
     engine, cache = open_services(local_dir)
     try:
         print("[学习环境] http://127.0.0.1:8767/qa；连接Docker独立数据库，不迁移旧历史；应用仍在Conda。")
         uvicorn.run(create_app(conversation_store=SQLConversationStore(engine), storage_backend="mysql",
-                               retrieval_cache=cache, cache_backend="redis", deployment_mode=True),
+                               retrieval_cache=cache, cache_backend="redis", deployment_mode=True, **options),
                     host="127.0.0.1", port=8767, access_log=False)
     finally:
         cache.close()
@@ -173,9 +184,12 @@ def main() -> int:
     modes = parser.add_mutually_exclusive_group()
     for action in ("prepare", "up", "check", "serve", "down"):
         modes.add_argument("--" + action, action="store_true")
+    parser.add_argument("--index-dir", type=Path, help="仅--serve：显式选择已ready索引，默认保持原知识库")
     args = parser.parse_args()
+    if args.index_dir is not None and not args.serve:
+        parser.error("--index-dir只能与--serve一起使用")
     print("[范围] 独立Compose项目fault-diagnosis-learning；MySQL13306/Redis16379；本机原服务不变。")
-    if not any(vars(args).values()):
+    if not any(getattr(args, action) for action in ("prepare", "up", "check", "serve", "down")):
         print("[步骤] --prepare生成独立配置 → --up启动基础服务 → --check只读检查。")
         print("[应用] --serve需先手动停止8766旧应用；在Conda启动8767，不代表应用镜像已完成。")
         print("[停止] --down保留MySQL卷和独立凭据；无删卷、迁移或重置密码操作。")
@@ -191,7 +205,10 @@ def main() -> int:
         elif args.check:
             print("[只读通过]", check())
         elif args.serve:
-            serve()
+            if args.index_dir is None:
+                serve()
+            else:
+                serve(index_dir=args.index_dir)
         else:
             compose("down")
             print("[停止] 学习环境基础容器已停止；MySQL数据卷及凭据保留，未删除问答记录。")

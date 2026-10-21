@@ -26,7 +26,21 @@ from qa_platform.storage import kubernetes_milvus as build
 
 DEFAULT_QUERY = "Pod里访问服务域名时DNS解析失败，应该如何排查？"
 SCORE_TOLERANCE = 1e-5
-MAX_DOCUMENTS = 1000  # 教学对照全量读回，不把它包装成大规模服务。
+MAX_DOCUMENTS = 5000  # 有界的本机学习范围，不是Milvus容量上限。
+MAX_VECTOR_BYTES = 128 * 1024 * 1024  # 仅原始float32矩阵，不是进程总内存上限。
+READ_BATCH_SIZE = 128
+MAX_MANIFEST_BYTES = 4 * 1024 * 1024
+
+
+def _check_capacity(plan: dict) -> tuple[int, int]:
+    require(isinstance(plan, dict) and isinstance(plan.get("embedding"), dict), "索引容量描述结构无效")
+    count, dimension = plan.get("document_count"), plan["embedding"].get("actual_dimension")
+    require(type(count) is int and 1 <= count <= MAX_DOCUMENTS,
+            f"本机学习入口只支持1～{MAX_DOCUMENTS}块的索引")
+    require(type(dimension) is int and 2 <= dimension <= 8192
+            and count * dimension * 4 <= MAX_VECTOR_BYTES,
+            "索引向量维度或原始float32矩阵超过128MiB读取预算")
+    return count, dimension
 
 
 def load_ready(index_dir: Path) -> tuple[dict, dict]:
@@ -43,16 +57,19 @@ def load_ready(index_dir: Path) -> tuple[dict, dict]:
     ):
         path = index_dir / name
         require(path.is_file() and not path.is_symlink(), f"缺少正常验收文件：{name}")
+    manifest_path = index_dir / "manifest.json"
+    require(0 < manifest_path.stat().st_size <= MAX_MANIFEST_BYTES, "索引清单大小超出读取范围")
+    manifest = json.loads(manifest_path.read_text())
+    early_scope = _check_capacity(manifest)  # 在加载SQLite向量前先拒绝超范围清单。
     plan, bundle = build.load_build(index_dir)
     require(
-        type(plan["document_count"]) is int
-        and 0 < plan["document_count"] <= MAX_DOCUMENTS,
-        "本教学对照只支持1～1000块的小索引",
+        _check_capacity(plan) == early_scope and len(plan["documents"]) == plan["document_count"],
+        "索引清单、冻结计划的容量或维度不一致",
     )
     written = json.loads((index_dir / "build_result.json").read_text())
     verified = json.loads((index_dir / "verification.json").read_text())
     observed = json.loads((index_dir / "model_observation.json").read_text())
-    manifest = json.loads((index_dir / "manifest.json").read_text())
+    require(json.loads(manifest_path.read_text()) == manifest, "读取期间索引清单发生变化")
     require(
         written["status"] == "written_not_verified"
         and verified["status"] == "verified",
@@ -92,6 +109,18 @@ def load_ready(index_dir: Path) -> tuple[dict, dict]:
         "已有Milvus数据库目录缺失，不会自动建库",
     )
     return plan, bundle
+
+
+def describe_index(index_dir: Path) -> dict:
+    """从已核验本地快照生成页面摘要；不打开Milvus或请求模型，不外露本机路径。"""
+    index_dir = Path(index_dir).expanduser().absolute()
+    plan, _ = load_ready(index_dir)
+    return {
+        "index_name": index_dir.name, "document_count": plan["document_count"],
+        "parent_count": len({row["parent_id"] for row in plan["documents"]}),
+        "dimension": plan["embedding"]["actual_dimension"],
+        "notice": "资料尚未逐条审核，包含参考数据页。恢复的历史可能来自旧索引，未重新检索；新提问才使用当前知识库。",
+    }
 
 
 def prepare_search(
@@ -148,6 +177,7 @@ def read_index(client, plan: dict):
     import numpy as np
     from pymilvus import DataType
 
+    _check_capacity(plan)
     require(client.has_collection(build.COLLECTION), "已有集合不存在，不会自动创建")
     description = client.describe_collection(collection_name=build.COLLECTION)
     fields = {field["name"]: field for field in description["fields"]}
@@ -186,31 +216,26 @@ def read_index(client, plan: dict):
         "集合记录数不符",
     )
     ids = [row["chunk_id"] for row in plan["documents"]]
-    records = client.get(
-        collection_name=build.COLLECTION, ids=ids, output_fields=build.OUTPUT_FIELDS
-    )
-    by_id = {row["chunk_id"]: row for row in records}
-    require(
-        len(records) == len(by_id) == len(ids) and set(by_id) == set(ids),
-        "读回主键不符",
-    )
+    require(len(ids) == plan["document_count"] and len(ids) == len(set(ids)), "计划主键数量或唯一性不符")
     vectors = []
-    for expected in plan["documents"]:
-        actual = by_id[expected["chunk_id"]]
+    # 小批读回并立即校验，不同时保留全部JSON浮点列表，降低瞬时内存峰值。
+    for start in range(0, len(ids), READ_BATCH_SIZE):
+        batch_ids = ids[start : start + READ_BATCH_SIZE]
+        records = client.get(collection_name=build.COLLECTION, ids=batch_ids, output_fields=build.OUTPUT_FIELDS)
+        by_id = {row["chunk_id"]: row for row in records}
         require(
-            all(actual.get(key) == value for key, value in expected.items()),
-            "数据库原文或元数据与快照不符",
+            len(records) == len(by_id) == len(batch_ids) and set(by_id) == set(batch_ids),
+            "读回主键不符",
         )
-        vector = np.asarray(actual["vector"], dtype="<f4")
-        require(
-            vector.shape == (plan["embedding"]["actual_dimension"],), "读回维度不符"
-        )
-        require(
-            sha256(vector.tobytes()).hexdigest()
-            == plan["vector_sha256"][expected["chunk_id"]],
-            "读回向量指纹不符",
-        )
-        vectors.append(vector)
+        for expected in plan["documents"][start : start + READ_BATCH_SIZE]:
+            actual = by_id[expected["chunk_id"]]
+            require(all(actual.get(key) == value for key, value in expected.items()),
+                    "数据库原文或元数据与快照不符")
+            vector = np.asarray(actual["vector"], dtype="<f4")
+            require(vector.shape == (plan["embedding"]["actual_dimension"],), "读回维度不符")
+            require(sha256(vector.tobytes()).hexdigest() == plan["vector_sha256"][expected["chunk_id"]],
+                    "读回向量指纹不符")
+            vectors.append(vector)
     return np.asarray(vectors, dtype="<f4")
 
 

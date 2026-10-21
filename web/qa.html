@@ -54,6 +54,7 @@
   <header>
     <h1>IT 运维知识库</h1>
     <p>Kubernetes 中文文档 · 一次提问，自动检索、重排并生成带引用的回答。</p>
+    <p id="knowledge-summary" hidden></p>
     <a href="/">打开检索实验台 →</a>
   </header>
 
@@ -141,6 +142,13 @@ function validatePlan(data) {
   requireValue(new Set(data.models.map(model => model.id)).size === data.models.length && data.models.some(model => model.id === data.default_model));
   requireValue(isObject(data.reranker) && typeof data.reranker.model === "string" && typeof data.reranker.url === "string");
   requireValue(strings(data.pipeline) && data.pipeline.join(",") === "retrieve,rerank,answer" && typeof data.notice === "string");
+  if (data.knowledge !== undefined) {
+    const knowledge = data.knowledge;
+    requireValue(isObject(knowledge) && Object.keys(knowledge).sort().join(",") === "dimension,document_count,index_name,notice,parent_count");
+    requireValue(typeof knowledge.index_name === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(knowledge.index_name));
+    requireValue(["document_count", "parent_count", "dimension"].every(key => Number.isSafeInteger(knowledge[key]) && knowledge[key] > 0));
+    requireValue(typeof knowledge.notice === "string" && knowledge.notice.trim().length > 0 && knowledge.notice.length <= 400);
+  }
   if (data.agent !== undefined) {
     requireValue(isObject(data.agent) && strings(data.agent.enabled_models) && data.agent.enabled_models.length > 0 && data.agent.enabled_models.every(id => data.models.some(model => model.id === id)));
     requireValue(data.agent.max_tool_calls === 2 && typeof data.agent.notice === "string" && isObject(data.agent.max_request_counts));
@@ -254,6 +262,8 @@ async function loadPlan() {
     if (!response.ok) throw new Error("无法读取问答配置，请检查服务后刷新页面。");
     const plan = validatePlan(await response.json());
     state.plan = plan;
+    el("knowledge-summary").hidden = !plan.knowledge;
+    el("knowledge-summary").textContent = plan.knowledge ? "当前知识库：" + plan.knowledge.parent_count + "篇 · " + plan.knowledge.document_count + "块 · " + plan.knowledge.dimension + "维。" + plan.knowledge.notice : "";
     for (const model of plan.models) {
       const option = text("option", model.id);
       option.value = model.id;
