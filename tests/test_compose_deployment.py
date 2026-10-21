@@ -486,15 +486,29 @@ def test_serve_refuses_shared_milvus_app_before_opening_any_services(monkeypatch
 @pytest.mark.parametrize("occupied", [None, 8766, 8767])
 def test_exclusive_app_checks_both_local_ports_without_ending_processes(monkeypatch, occupied):
     bound = []
+    probes = []
+    kill = Mock(side_effect=AssertionError("The port probe must not kill an existing application"))
+    monkeypatch.setattr(deployment.os, "kill", kill)
 
     class FakeSocket:
+        def __init__(self):
+            self.events = []
+            probes.append(self)
+
         def __enter__(self):
             return self
 
         def __exit__(self, *_args):
+            self.events.append(("close",))
             return False
 
+        def setsockopt(self, level, option, value):
+            assert (level, option, value) == (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.events.append(("setsockopt", level, option, value))
+
         def bind(self, address):
+            assert self.events == [("setsockopt", socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)]
+            self.events.append(("bind", address))
             bound.append(address)
             if address[1] == occupied:
                 raise OSError("SYNTHETIC_BUSY_PORT")
@@ -511,6 +525,40 @@ def test_exclusive_app_checks_both_local_ports_without_ending_processes(monkeypa
         assert "手动停止" in str(caught.value)
         assert bound[-1] == ("127.0.0.1", occupied)
     assert all(call.args == (socket.AF_INET, socket.SOCK_STREAM) for call in factory.call_args_list)
+    assert all(probe.events[-1] == ("close",) for probe in probes)
+    kill.assert_not_called()
+
+
+@pytest.mark.parametrize("time_wait_port", [8766, 8767])
+def test_exclusive_app_allows_stopped_server_time_wait_without_reusing_active_listeners(monkeypatch, time_wait_port):
+    """Simulate TIME_WAIT offline: address reuse must be enabled before either bind."""
+    import errno
+
+    bound = []
+
+    class TimeWaitSocket:
+        def __init__(self):
+            self.reuse_address = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def setsockopt(self, level, option, value):
+            # SO_REUSEPORT would allow sharing a listener and must never be used here.
+            assert (level, option, value) == (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.reuse_address = True
+
+        def bind(self, address):
+            if address[1] == time_wait_port and not self.reuse_address:
+                raise OSError(errno.EADDRINUSE, "SYNTHETIC_TIME_WAIT")
+            bound.append(address)
+
+    monkeypatch.setattr(socket, "socket", Mock(side_effect=lambda *_args: TimeWaitSocket()))
+    deployment.require_exclusive_app()
+    assert bound == [("127.0.0.1", 8766), ("127.0.0.1", 8767)]
 
 
 def test_serve_uses_local_8767_mysql_redis_and_closes_resources(monkeypatch, tmp_path):

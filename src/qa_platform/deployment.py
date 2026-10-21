@@ -144,6 +144,8 @@ def require_exclusive_app() -> None:
     for port in (8766, 8767):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                # 允许已退出服务的TIME_WAIT连接；不启用允许并行监听的SO_REUSEPORT。
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 probe.bind(("127.0.0.1", port))
         except OSError:
             raise DeploymentError("8766或8767已有应用；请先手动停止旧应用，避免两个进程共用Milvus Lite。不会自动结束它。") from None
