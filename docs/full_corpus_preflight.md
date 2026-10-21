@@ -56,3 +56,40 @@ python -B scripts/check_k8s_full_corpus.py --run \
 模板相关计数基于清洗器告警，按文档去重；已支持但参数不兼容的模板也会计入。代码中的模板被保护，不能用全文正则冒充未知模板发生次数。同一篇可有多种原因，原因数量不可相加当作文档总数。HTML全部转义，无脚本和远程资源，不执行文档命令。
 
 当前多格式接入与便携导出工具有1000块的学习性保护上限，**不是Milvus容量上限**。本报告不解除限制，也不把1920块直接交给旧入口；后续需先确定哪些文件应独立索引、处理高频清洗障碍，再准备新版本语料和编码计划。
+
+## 把已通过的1920块写入本机Milvus
+
+用户明确要求入库后，使用独立的 `scripts/prepare_k8s_full_corpus.py` 将本报告的755篇通过页重建为兼容原v2格式的新语料。该格式和原编码缓存、Milvus构建器没有1000块总数限制；无需改动绑定旧索引的规则源码。755篇仍保留特性门、术语等资料角色提示及完整frontmatter，不声称它们都是独立运维教程。739篇待处理文档不入库。
+
+```bash
+# 只执行一次，生成全新的冻结语料；已有目标拒绝覆盖
+python -B scripts/prepare_k8s_full_corpus.py --run
+
+# 使用自部署Ollama，按每批8块编码；中断后同命令续跑
+python -B scripts/build_k8s_embeddings.py \
+  --corpus data/k8s_corpora/full_preflight_v1 --run
+
+# 不再编码，纯离线核验已提交缓存
+python -B scripts/build_k8s_embeddings.py \
+  --corpus data/k8s_corpora/full_preflight_v1 --verify
+
+# 复用完成缓存，构建一个新的本机Milvus Lite索引
+python -B scripts/build_k8s_milvus.py \
+  --corpus data/k8s_corpora/full_preflight_v1 \
+  --index-dir data/milvus_indexes/kubernetes_full_preflight_v1 --run
+```
+
+准备器会重新核对报告、全部源文档和依赖指纹、规则版本及逐页/总块数，复用原 `write_bundle()` 完成写入与读回。新增 `kubernetes_full_corpus.py` 只负责这个转换，命令入口不调用模型；专项测试为 `tests/test_full_corpus_build.py`。文档编码、SQLite事务检查点和Milvus跨进程验收复用原实现。Embedding仅发送候选正文到已经配置的内网服务，不调用云端Reranker或聊天；`truncate=false`，失败停批、不自动重试，已提交批次保留。
+
+本次构建使用独立目录，保留旧156/215块索引，不切换问答服务。当前查询教学入口 `kubernetes_search.load_ready()` 仍限制1000块，不能直接给现有QA指定1920块新索引；检索入口扩容是后续步骤。索引`ready`只代表存储验收，不表示检索质量或回答正确性通过。
+
+### 实际入库验收（2026-10-21）
+
+- 新语料：`data/k8s_corpora/full_preflight_v1/`，755篇、1920块，旧v2格式严格读回核验通过。
+- 编码缓存：`data/embedding_cache/kubernetes_zh_d554e2282033bcbf/embeddings.sqlite3`，1920/1920块、240批，状态`encoded_complete`，随后纯离线审计通过。使用内网Ollama `qwen3-embedding:8b`、4096维、body-only、`truncate=false`；原始语料的阶段标记未改写。
+- 模型请求：240次本地Embedding＋480次批次前后digest GET＝720次模型服务HTTP；另有开始前连通性检查1次GET和入Milvus前1次GET，本轮合计722次。无自动重试，无云端Embedding、Reranker或聊天请求。服务返回批次处理Token合计266867，不是云端账单或逐文本Tokenizer验证；Embedding客户端请求耗时合计172.71秒，不是整个流程墙钟耗时。
+- 新索引：`data/milvus_indexes/kubernetes_full_preflight_v1/`，集合`kubernetes_chunks_v1`，本机Milvus Lite、FLAT/COSINE，状态`ready`。写入PID64708退出后，独立PID64721重开，全部1920条原文、完整元数据与float32向量SHA一致。
+- 存储层搜索验收：同一已存文档向量，全部分数与NumPy余弦对照最大差约`1.47e-07`；自相似度约1，铁路测试库过滤为空。没有调用问题编码，不冒充问句检索质量验证。
+- 新增47项准备器测试通过；连同全量盘点、编码缓存和Milvus构建专项共147项测试通过（1项既有依赖警告）。旧156/215块索引严格合同仍通过，Compose只读检查仍为2条会话、2条问答。
+
+本机粗略磁盘占用：语料9.1MiB、编码缓存38MiB、Milvus索引67MiB，均被Git忽略。索引已入库不意味着已有问答页面自动使用新数据；本轮没有修改查询容量限制或切换运行服务。

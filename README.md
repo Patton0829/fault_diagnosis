@@ -929,3 +929,7 @@ v2 的清单记录了迁移前四份规则源码的完整 SHA256。直接更改�
 ### 全量中文文档规模盘点
 
 新增 `scripts/check_k8s_full_corpus.py`，零模型扫描1665个中文Markdown文件，沿用默认156块库的规则：755篇通过、1920个候选块；739篇待处理，163篇导航及8篇draft/headless按范围排除。通过页中611篇是特性门或术语数据页，不能当作755篇独立运维教程。未编码、未入库、未切换服务；全量最终块数仍取决于待处理文档和独立索引策略。[完整口径与使用说明](docs/full_corpus_preflight.md)。
+
+### 已通过候选的本地编码与Milvus入库
+
+2026-10-21按用户要求将上述755篇/1920块保存为新语料，使用内网`qwen3-embedding:8b`实际编码240批、4096维，再复用缓存写入本机Milvus Lite。新索引`data/milvus_indexes/kubernetes_full_preflight_v1/`已`ready`，跨进程全量原文/元数据/向量核对通过，NumPy余弦对照最大差约`1.47e-07`。未纳入739篇待处理资料，未调用云端重排或聊天，旧156/215块索引保留。新增准备入口`scripts/prepare_k8s_full_corpus.py`；147项相关测试通过。当前QA的1000块教学限制仍保留，未切换服务；[命令、成本和验收说明](docs/full_corpus_preflight.md#把已通过的1920块写入本机milvus)。
